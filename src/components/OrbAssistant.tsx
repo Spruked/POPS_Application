@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, ExternalLink, Orbit, ShieldCheck, X } from 'lucide-react';
+import popsLexicon from '../data/popslexicon.md?raw';
 
 const OLLAMA_BASE_URL = (import.meta.env.VITE_OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL || 'llama3.2:1b';
+
+const ORB_SYSTEM_CONTEXT = `You are the POPS ORB inside a local-first evidence workstation.
+Use the POPS Lexicon as fixed language guidance.
+Answer in plain English, keep guidance factual and court-safe, and do not create legal conclusions.
+When high-sensitivity terms appear, explain them and recommend attorney review before export or filing.
+
+${popsLexicon}`;
 
 export default function OrbAssistant() {
   const [isOpen, setIsOpen] = useState(false);
@@ -46,7 +54,7 @@ export default function OrbAssistant() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: OLLAMA_MODEL,
-          prompt: trimmed,
+          prompt: `${ORB_SYSTEM_CONTEXT}\n\nUser request:\n${trimmed}`,
           stream: false,
         }),
       });
@@ -102,13 +110,14 @@ export default function OrbAssistant() {
             <div className="orb-command-tile">
               <Orbit size={15} />
               <span>ORB Mode</span>
-              <strong>{isRunning ? 'Inference Running' : 'Command Relay'}</strong>
+              <strong>{isRunning ? 'Inference Running' : 'Lexicon Guided'}</strong>
             </div>
           </div>
 
           <div className="orb-command-meta">
             <div><strong>Model:</strong> {OLLAMA_MODEL}</div>
             <div><strong>Endpoint:</strong> {endpoint}</div>
+            <div><strong>Reference:</strong> POPS Lexicon loaded</div>
           </div>
 
           <textarea
