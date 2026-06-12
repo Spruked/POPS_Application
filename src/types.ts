@@ -129,4 +129,4 @@ export interface PlayerDossierRecord {
   updatedAt: string;
 }
 
-export type Page = 'dashboard' | 'evidence' | 'incidents' | 'orders' | 'violations' | 'visitation' | 'events' | 'reports' | 'profile' | 'players' | 'about' | 'access' | 'member' | 'lexicon';
+export type Page = 'dashboard' | 'evidence' | 'incidents' | 'orders' | 'violations' | 'visitation' | 'events' | 'reports' | 'profile' | 'players' | 'about' | 'access' | 'member' | 'lexicon' | 'declaration' | 'pledge';

@@ -16,6 +16,8 @@ import AboutMission from "./pages/AboutMission";
 import AccessBrotherhood from "./pages/AccessBrotherhood";
 import MemberCommand from "./pages/MemberCommand";
 import Lexicon from "./pages/Lexicon";
+import Declaration from "./pages/Declaration";
+import Pledge from "./pages/Pledge";
 import { useToast } from "./hooks/useToast";
 import type { Page } from "./types";
 
@@ -40,6 +42,8 @@ function App() {
     access: <AccessBrotherhood />,
     member: <MemberCommand />,
     lexicon: <Lexicon />,
+    declaration: <Declaration />,
+    pledge: <Pledge />,
   };
 
   return (

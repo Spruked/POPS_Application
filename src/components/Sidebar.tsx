@@ -19,6 +19,8 @@ const navItems: { page: Page; label: string; icon: React.ElementType; badge?: st
   { page: 'events', label: 'Events & Timeline', icon: Calendar },
   { page: 'players', label: 'The Players Dossier', icon: Users, badge: 'Core' },
   { page: 'lexicon', label: 'Lexicon + Highlights', icon: BookOpen, badge: 'Guide' },
+  { page: 'declaration', label: 'Declaration', icon: BookOpen, badge: 'POPS' },
+  { page: 'pledge', label: 'Creed + Pledge', icon: BookOpen, badge: 'POPS' },
   { page: 'access', label: 'Access & Brotherhood', icon: Handshake, badge: 'POPS' },
   { page: 'about', label: 'About and Mission', icon: BookOpen },
   { page: 'reports', label: 'Reports', icon: FileText },
