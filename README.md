@@ -25,7 +25,8 @@ https://github.com/Spruked/POPS_website.git
 
 - TPC/governance is the reasoning authority.
 - LLM layers are articulation/output support only.
-- The ORB assistant sends user text to the local TPC backend and displays/speaks the TPC response.
+- The floating app ORB currently sends user text to local Ollama and injects the POPS Lexicon as fixed context.
+- The TPC Website ORB backend remains the local reasoning service for `/health`, `/api/v1/reason`, `/api/v1/speak`, and websocket pipeline traffic.
 - Browser speech recognition is used only after user permission through the browser/Tauri webview.
 
 ## Gate 1 Input Design
@@ -65,6 +66,25 @@ Expected Vite/Tauri frontend port:
 http://127.0.0.1:18020
 ```
 
+For a frontend-only app check:
+
+```powershell
+npm run dev
+```
+
+For a production frontend build check:
+
+```powershell
+npm run build
+```
+
+For the Rust/Tauri compile gate:
+
+```powershell
+cd src-tauri
+cargo check
+```
+
 ## Backend Checks
 
 ```powershell
@@ -87,10 +107,24 @@ The floating ORB assistant is mounted from:
 src/components/OrbAssistant.tsx
 ```
 
-It calls:
+It calls local Ollama by default:
 
 ```text
-POST http://127.0.0.1:8000/api/v1/reason
+GET  http://127.0.0.1:11434/api/tags
+POST http://127.0.0.1:11434/api/generate
+```
+
+Configurable environment values:
+
+```text
+VITE_OLLAMA_BASE_URL=http://127.0.0.1:11434
+VITE_OLLAMA_MODEL=llama3.2:1b
+```
+
+The Orb injects this local reference before user prompts:
+
+```text
+src/data/popslexicon.md
 ```
 
 It also uses browser speech APIs when available:
@@ -100,6 +134,55 @@ SpeechRecognition
 webkitSpeechRecognition
 speechSynthesis
 ```
+
+## Doctrine / Lexicon Surfaces
+
+The app includes the same core POPS doctrine as the website:
+
+```text
+src/pages/Declaration.tsx
+src/pages/Pledge.tsx
+src/pages/Lexicon.tsx
+src/data/doctrine.ts
+src/data/lexicon.ts
+src/data/popslexicon.md
+```
+
+Navigation entries are registered in:
+
+```text
+src/components/Sidebar.tsx
+src/types.ts
+src/App.tsx
+```
+
+Doctrine rule:
+
+- Declaration, Creed/Pledge, and Lexicon exist in both the website and app.
+- Website versions are public-facing.
+- App versions are user-facing and tied to the local case command environment.
+- The Orb references the app-side lexicon markdown for court-safe language guidance.
+
+App / ORB Lexicon direction:
+
+```text
+pops_core_doctrine.md
+pops_legal_terms.md
+pops_constitutional_terms.md
+pops_evidence_terms.md
+pops_rewrite_rules.md
+pops_annotation_labels.md
+pops_support_terms.md
+pops_visitation_terms.md
+```
+
+Current V1 uses a single Orb-loaded markdown file:
+
+```text
+src/data/popslexicon.md
+```
+
+The modular split above is the next production hardening step so the Orb can always load core doctrine, annotation labels, and rewrite rules while loading legal, constitutional, evidence, support, and visitation terms only when needed.
 
 ## Main Project Structure
 
@@ -231,3 +314,5 @@ Implemented V1 access/safety status:
 - TPC Website ORB backend has passed `/health` and `/api/v1/reason` smoke tests.
 - Tauri/Rust `cargo check` has passed.
 - Evidence Vault now preserves imported originals, stores metadata, verifies file integrity, and maintains custody/security ledgers.
+- App includes Declaration, Creed/Pledge, and Lexicon surfaces.
+- Floating ORB is Lexicon Guided through `src/data/popslexicon.md`.
