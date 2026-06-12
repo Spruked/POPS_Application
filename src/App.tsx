@@ -13,6 +13,9 @@ import Profile from "./pages/Profile";
 import PlayersDossier from "./pages/PlayersDossier";
 import Incidents from "./pages/Incidents";
 import AboutMission from "./pages/AboutMission";
+import Mission from "./pages/Mission";
+import Doctrine from "./pages/Doctrine";
+import HowItWorks from "./pages/HowItWorks";
 import AccessBrotherhood from "./pages/AccessBrotherhood";
 import MemberCommand from "./pages/MemberCommand";
 import Lexicon from "./pages/Lexicon";
@@ -39,6 +42,9 @@ function App() {
     players: <PlayersDossier />,
     incidents: <Incidents />,
     about: <AboutMission />,
+    mission: <Mission />,
+    doctrine: <Doctrine />,
+    howItWorks: <HowItWorks />,
     access: <AccessBrotherhood />,
     member: <MemberCommand />,
     lexicon: <Lexicon />,

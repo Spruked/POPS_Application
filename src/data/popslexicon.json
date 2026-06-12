@@ -1,0 +1,128 @@
+{
+  "module": "POPS Lexicon",
+  "version": "1.0.0",
+  "description": "Courtroom and constitutional terms for POPS users to recognize, understand, and use carefully in reports, timelines, and exports.",
+  "audience": [
+    "parents",
+    "pro se users",
+    "attorneys",
+    "case reviewers"
+  ],
+  "terms": [
+    {
+      "term": "culpable",
+      "category": "legal",
+      "sensitivity": "high",
+      "plain_english": "Legally or morally responsible for wrongdoing.",
+      "why_it_matters": "This word can sound like a legal conclusion, so POPS should encourage factual wording instead of blame.",
+      "court_safe_example": "The records show the scheduled parenting time did not occur on the dates listed.",
+      "app_guidance": "Flag for attorney review if used in a report, packet, or filing."
+    },
+    {
+      "term": "exculpatory",
+      "category": "evidence",
+      "sensitivity": "medium",
+      "plain_english": "Evidence that may help show a person did not do something wrong or did comply with an order.",
+      "why_it_matters": "Users should be able to tag records that may help show lawful conduct or a good-faith effort.",
+      "court_safe_example": "This message may be exculpatory because it shows I appeared at the exchange location on time.",
+      "app_guidance": "Allow tagging and evidence classification."
+    },
+    {
+      "term": "pro se",
+      "category": "court_procedure",
+      "sensitivity": "medium",
+      "plain_english": "Representing yourself in court without an attorney.",
+      "why_it_matters": "Many POPS users may be self-represented and need organizing help.",
+      "court_safe_example": "I am appearing pro se and have organized the attached records for the Court's review.",
+      "app_guidance": "Show as informational and supportive, not as legal advice."
+    },
+    {
+      "term": "prima facie",
+      "category": "legal_standard",
+      "sensitivity": "high",
+      "plain_english": "Something that appears sufficient on its face unless challenged by other evidence.",
+      "why_it_matters": "This is a legal threshold term and should be used carefully.",
+      "court_safe_example": "The timeline and records may show a prima facie pattern of missed parenting time.",
+      "app_guidance": "Flag for review when used as a conclusion."
+    },
+    {
+      "term": "estoppel",
+      "category": "legal_doctrine",
+      "sensitivity": "high",
+      "plain_english": "A rule that may prevent someone from taking a position that conflicts with earlier words, actions, or promises when another person relied on them.",
+      "why_it_matters": "POPS should preserve messages, agreements, and reliance evidence.",
+      "court_safe_example": "The messages show an agreed exchange time, and I relied on that agreement by appearing at the location.",
+      "app_guidance": "Flag for attorney review if used in a filing."
+    },
+    {
+      "term": "habeas corpus",
+      "category": "constitutional_procedure",
+      "sensitivity": "high",
+      "plain_english": "\"You shall have the body.\" A procedure used to challenge unlawful detention or restraint.",
+      "why_it_matters": "This is a serious legal procedure and should be handled cautiously.",
+      "court_safe_example": "This term involves serious legal procedure and should be reviewed with an attorney or appropriate legal authority before use.",
+      "app_guidance": "Restrict to informational display and attorney review guidance."
+    },
+    {
+      "term": "Fifth Amendment",
+      "category": "constitutional_right",
+      "sensitivity": "high",
+      "plain_english": "A constitutional protection that includes due process and protection against self-incrimination.",
+      "why_it_matters": "Statements involving accusations, police contact, admissions, or investigations may need careful review.",
+      "court_safe_example": "Statements involving possible criminal exposure should be reviewed by counsel before filing or sharing.",
+      "app_guidance": "Flag sensitive narrative content for review."
+    },
+    {
+      "term": "Fourteenth Amendment",
+      "category": "constitutional_right",
+      "sensitivity": "high",
+      "plain_english": "A constitutional protection that includes due process and equal protection principles.",
+      "why_it_matters": "In family-law contexts, users may hear this discussed in relation to notice, hearings, fairness, and state action.",
+      "court_safe_example": "My records are organized to show notice received, appearances made, and communication attempts.",
+      "app_guidance": "Provide plain-language explanation and flag constitutional claims for review."
+    },
+    {
+      "term": "due process",
+      "category": "constitutional_principle",
+      "sensitivity": "medium",
+      "plain_english": "Fair legal procedure, including notice and an opportunity to be heard before important rights are affected.",
+      "why_it_matters": "POPS can help track service, hearings, filings, and procedural gaps.",
+      "court_safe_example": "The attached records show the dates I received notice and the steps I took to respond.",
+      "app_guidance": "Support factual tracking; do not suggest legal conclusions."
+    },
+    {
+      "term": "equal protection",
+      "category": "constitutional_principle",
+      "sensitivity": "medium",
+      "plain_english": "The idea that the government should apply the law fairly and not treat similarly situated people differently without a lawful reason.",
+      "why_it_matters": "POPS should preserve facts and comparisons for attorney review.",
+      "court_safe_example": "The records show the dates, actions taken, and how the situation was handled compared with prior events.",
+      "app_guidance": "Keep factual and avoid encouraging unsupported constitutional claims."
+    }
+  ],
+  "global_rules": {
+    "high_sensitivity_terms": [
+      "culpable",
+      "prima facie",
+      "estoppel",
+      "habeas corpus",
+      "Fifth Amendment",
+      "Fourteenth Amendment"
+    ],
+    "flag_message": "Attorney Review Recommended: This term may carry legal significance. Make sure the surrounding facts, evidence, and wording are accurate before filing or sharing.",
+    "rewrite_strategy": [
+      "Prefer facts over conclusions.",
+      "Prefer dates, records, and actions over blame.",
+      "Prefer documented events over legal labels."
+    ]
+  },
+  "ui_behavior": {
+    "show_plain_english": true,
+    "show_court_safe_example": true,
+    "show_sensitivity_badge": true,
+    "show_attorney_review_flag": true,
+    "allow_search": true,
+    "allow_favorites": true,
+    "allow_term_tagging": true
+  }
+}

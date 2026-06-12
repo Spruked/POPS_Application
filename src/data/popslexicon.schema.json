@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pops.app/schemas/lexicon.schema.json",
+  "title": "POPS Lexicon Schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "module",
+    "version",
+    "description",
+    "audience",
+    "terms",
+    "global_rules",
+    "ui_behavior"
+  ],
+  "properties": {
+    "module": {
+      "type": "string",
+      "const": "POPS Lexicon"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "audience": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "parents",
+          "pro se users",
+          "attorneys",
+          "case reviewers"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "terms": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/lexiconTerm"
+      }
+    },
+    "global_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "high_sensitivity_terms",
+        "flag_message",
+        "rewrite_strategy"
+      ],
+      "properties": {
+        "high_sensitivity_terms": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "flag_message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rewrite_strategy": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "ui_behavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "show_plain_english",
+        "show_court_safe_example",
+        "show_sensitivity_badge",
+        "show_attorney_review_flag",
+        "allow_search",
+        "allow_favorites",
+        "allow_term_tagging"
+      ],
+      "properties": {
+        "show_plain_english": { "type": "boolean" },
+        "show_court_safe_example": { "type": "boolean" },
+        "show_sensitivity_badge": { "type": "boolean" },
+        "show_attorney_review_flag": { "type": "boolean" },
+        "allow_search": { "type": "boolean" },
+        "allow_favorites": { "type": "boolean" },
+        "allow_term_tagging": { "type": "boolean" }
+      }
+    }
+  },
+  "$defs": {
+    "lexiconTerm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "term",
+        "category",
+        "sensitivity",
+        "plain_english",
+        "why_it_matters",
+        "court_safe_example",
+        "app_guidance"
+      ],
+      "properties": {
+        "term": {
+          "type": "string",
+          "minLength": 1
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "legal",
+            "evidence",
+            "court_procedure",
+            "legal_standard",
+            "legal_doctrine",
+            "constitutional_procedure",
+            "constitutional_right",
+            "constitutional_principle"
+          ]
+        },
+        "sensitivity": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "plain_english": {
+          "type": "string",
+          "minLength": 1
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1
+        },
+        "court_safe_example": {
+          "type": "string",
+          "minLength": 1
+        },
+        "app_guidance": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

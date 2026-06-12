@@ -1,8 +1,19 @@
+import popsLexicon from './popslexicon.json';
+import {
+  LEXICON_VALIDATION_FAILURE_MESSAGE,
+  validatePopsLexicon,
+  type PopsLexiconData,
+} from './validatePopsLexicon';
+
 export interface LexiconEntry {
   term: string;
-  popsExplanation: string;
-  category: 'custody' | 'evidence' | 'support' | 'language';
-  highSensitivity?: boolean;
+  category: string;
+  sensitivity: 'high' | 'medium' | 'low';
+  plainEnglish: string;
+  whyItMatters: string;
+  courtSafeExample: string;
+  appGuidance: string;
+  highSensitivity: boolean;
 }
 
 export type AnnotationLabel =
@@ -16,133 +27,66 @@ export type AnnotationLabel =
   | 'Support-related'
   | 'Attorney review';
 
-export const POPS_LEXICON: LexiconEntry[] = [
-  {
-    term: 'Denied parenting time',
-    popsExplanation:
-      'A scheduled visit or exchange did not happen because the child was not made available or access was blocked.',
-    category: 'custody',
-  },
-  {
-    term: 'Contempt',
-    popsExplanation:
-      'A possible legal issue where someone may have failed to follow a court order. POPS should explain facts, not accuse.',
-    category: 'language',
-  },
-  {
-    term: 'Arrears',
-    popsExplanation: 'Past-due child support balance.',
-    category: 'support',
-  },
-  {
-    term: 'Good-faith attempt',
-    popsExplanation:
-      'A documented effort to comply, appear, communicate, or resolve an issue lawfully.',
-    category: 'custody',
-  },
-  {
-    term: 'Chain of custody',
-    popsExplanation:
-      'The record of how evidence was received, stored, handled, and preserved.',
-    category: 'evidence',
-  },
-  {
-    term: 'Native file',
-    popsExplanation:
-      'The original file in its original format before edits or conversion.',
-    category: 'evidence',
-  },
-  {
-    term: 'Metadata',
-    popsExplanation:
-      'Information attached to a file, such as date, source, device, or creation details.',
-    category: 'evidence',
-  },
-  {
-    term: 'Court-safe language',
-    popsExplanation:
-      'Factual, non-inflammatory wording suitable for attorney or court review.',
-    category: 'language',
-  },
-  {
-    term: 'Parenting plan',
-    popsExplanation:
-      'A written schedule and rule structure for parenting time, decision-making, communication, and child-related duties.',
-    category: 'custody',
-  },
-  {
-    term: 'Support obligation',
-    popsExplanation:
-      'The current amount owed under an order or agreement.',
-    category: 'support',
-  },
-  {
-    term: 'Culpable',
-    popsExplanation:
-      'Legally or morally responsible for an act, failure, violation, or wrongdoing. Use carefully and anchor to documented facts.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Exculpatory',
-    popsExplanation:
-      'Evidence that may help show a person did not do something wrong, complied with an order, or made good-faith lawful efforts.',
-    category: 'evidence',
-  },
-  {
-    term: 'Pro se',
-    popsExplanation:
-      'Representing yourself in court without an attorney. POPS helps organize records but does not replace legal counsel.',
-    category: 'language',
-  },
-  {
-    term: 'Prima facie',
-    popsExplanation:
-      'A preliminary showing that appears sufficient on its face unless challenged by other evidence.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Estoppel',
-    popsExplanation:
-      'A legal principle that may prevent a contradictory position when earlier words/actions were reasonably relied on.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Habeas corpus',
-    popsExplanation:
-      'A serious legal procedure used to challenge unlawful detention or restraint. Requires attorney-level review before use.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Fifth Amendment',
-    popsExplanation:
-      'U.S. constitutional protections including due process and the right against self-incrimination; sensitive statements should be reviewed by counsel.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Fourteenth Amendment',
-    popsExplanation:
-      'U.S. constitutional due process and equal protection principles often discussed in relation to parental rights, notice, and fairness.',
-    category: 'language',
-    highSensitivity: true,
-  },
-  {
-    term: 'Due process',
-    popsExplanation:
-      'Fair legal procedure, including notice and meaningful opportunity to be heard before important rights are affected.',
-    category: 'language',
-  },
-  {
-    term: 'Equal protection',
-    popsExplanation:
-      'Government should apply law fairly and not treat similarly situated people differently without lawful reason.',
-    category: 'language',
-  },
-];
+export const POPS_LEXICON_VALIDATION = validatePopsLexicon(popsLexicon);
+
+const validatedLexicon = POPS_LEXICON_VALIDATION.ok ? (popsLexicon as PopsLexiconData) : null;
+
+export const POPS_LEXICON: LexiconEntry[] = validatedLexicon ? validatedLexicon.terms.map((entry) => ({
+  term: entry.term,
+  category: entry.category,
+  sensitivity: entry.sensitivity,
+  plainEnglish: entry.plain_english,
+  whyItMatters: entry.why_it_matters,
+  courtSafeExample: entry.court_safe_example,
+  appGuidance: entry.app_guidance,
+  highSensitivity: validatedLexicon.global_rules.high_sensitivity_terms
+    .map((term) => term.toLowerCase())
+    .includes(entry.term.toLowerCase()),
+})) : [];
+
+export const LEXICON_FLAG_MESSAGE = validatedLexicon
+  ? validatedLexicon.global_rules.flag_message
+  : LEXICON_VALIDATION_FAILURE_MESSAGE;
+
+export const LEXICON_REWRITE_STRATEGY = validatedLexicon
+  ? validatedLexicon.global_rules.rewrite_strategy
+  : [];
+
+export const LEXICON_UI_BEHAVIOR = validatedLexicon
+  ? validatedLexicon.ui_behavior
+  : {
+      show_plain_english: false,
+      show_court_safe_example: false,
+      show_sensitivity_badge: false,
+      show_attorney_review_flag: false,
+      allow_search: false,
+      allow_favorites: false,
+      allow_term_tagging: false,
+    };
+
+export function buildOrbLexiconGuidance() {
+  if (!validatedLexicon) return LEXICON_VALIDATION_FAILURE_MESSAGE;
+
+  const rules = validatedLexicon.global_rules.rewrite_strategy.map((rule) => `- ${rule}`).join('\n');
+  const highTerms = validatedLexicon.global_rules.high_sensitivity_terms.join(', ');
+  const terms = validatedLexicon.terms
+    .map(
+      (entry) =>
+        `- ${entry.term} (${entry.category}, ${entry.sensitivity}): ${entry.plain_english} Guidance: ${entry.app_guidance}`
+    )
+    .join('\n');
+
+  return [
+    `${validatedLexicon.module} v${validatedLexicon.version}`,
+    validatedLexicon.description,
+    `High-sensitivity terms: ${highTerms}`,
+    `Flag message: ${validatedLexicon.global_rules.flag_message}`,
+    'Rewrite strategy:',
+    rules,
+    'Terms:',
+    terms,
+  ].join('\n');
+}
 
 export const RISK_TERMS: Record<string, string> = {
   kidnapped: 'Use factual wording: child was not made available for scheduled parenting time.',
@@ -153,14 +97,9 @@ export const RISK_TERMS: Record<string, string> = {
   threatened: 'Describe exact words or behavior and attach source evidence.',
 };
 
-export const HIGH_SENSITIVITY_TERMS = [
-  'culpable',
-  'estoppel',
-  'habeas corpus',
-  'fifth amendment',
-  'fourteenth amendment',
-  'prima facie',
-];
+export const HIGH_SENSITIVITY_TERMS = validatedLexicon
+  ? validatedLexicon.global_rules.high_sensitivity_terms.map((term) => term.toLowerCase())
+  : [];
 
 export const ANNOTATION_LABELS: AnnotationLabel[] = [
   'Court-safe',

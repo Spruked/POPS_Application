@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Activity, ExternalLink, Orbit, ShieldCheck, X } from 'lucide-react';
-import popsLexicon from '../data/popslexicon.md?raw';
+import { buildOrbLexiconGuidance, POPS_LEXICON_VALIDATION } from '../data/lexicon';
+import { LEXICON_VALIDATION_FAILURE_MESSAGE } from '../data/validatePopsLexicon';
 
 const OLLAMA_BASE_URL = (import.meta.env.VITE_OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL || 'llama3.2:1b';
@@ -10,7 +11,7 @@ Use the POPS Lexicon as fixed language guidance.
 Answer in plain English, keep guidance factual and court-safe, and do not create legal conclusions.
 When high-sensitivity terms appear, explain them and recommend attorney review before export or filing.
 
-${popsLexicon}`;
+${buildOrbLexiconGuidance()}`;
 
 export default function OrbAssistant() {
   const [isOpen, setIsOpen] = useState(false);
@@ -110,14 +111,14 @@ export default function OrbAssistant() {
             <div className="orb-command-tile">
               <Orbit size={15} />
               <span>ORB Mode</span>
-              <strong>{isRunning ? 'Inference Running' : 'Lexicon Guided'}</strong>
+              <strong>{isRunning ? 'Inference Running' : POPS_LEXICON_VALIDATION.ok ? 'Lexicon Guided' : 'Lexicon Disabled'}</strong>
             </div>
           </div>
 
           <div className="orb-command-meta">
             <div><strong>Model:</strong> {OLLAMA_MODEL}</div>
             <div><strong>Endpoint:</strong> {endpoint}</div>
-            <div><strong>Reference:</strong> POPS Lexicon loaded</div>
+            <div><strong>Reference:</strong> {POPS_LEXICON_VALIDATION.ok ? 'POPS Lexicon loaded' : LEXICON_VALIDATION_FAILURE_MESSAGE}</div>
           </div>
 
           <textarea

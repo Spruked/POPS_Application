@@ -9,8 +9,11 @@ interface SidebarProps {
   onNavigate: (page: Page) => void;
 }
 
-const navItems: { page: Page; label: string; icon: React.ElementType; badge?: string }[] = [
-  { page: 'member', label: 'Member Command', icon: Monitor, badge: 'WEB' },
+const navSections: { title: string; items: { page: Page; label: string; icon: React.ElementType; badge?: string }[] }[] = [
+  {
+    title: 'Case Management',
+    items: [
+      { page: 'member', label: 'Member Command', icon: Monitor, badge: 'WEB' },
   { page: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { page: 'evidence', label: 'Evidence Vault', icon: Shield, badge: 'SHA-256' },
   { page: 'orders', label: 'Court Orders', icon: Gavel },
@@ -18,13 +21,28 @@ const navItems: { page: Page; label: string; icon: React.ElementType; badge?: st
   { page: 'visitation', label: 'Visitation Calendar', icon: Calendar, badge: 'Core' },
   { page: 'events', label: 'Events & Timeline', icon: Calendar },
   { page: 'players', label: 'The Players Dossier', icon: Users, badge: 'Core' },
-  { page: 'lexicon', label: 'Lexicon + Highlights', icon: BookOpen, badge: 'Guide' },
-  { page: 'declaration', label: 'Declaration', icon: BookOpen, badge: 'POPS' },
-  { page: 'pledge', label: 'Creed + Pledge', icon: BookOpen, badge: 'POPS' },
-  { page: 'access', label: 'Access & Brotherhood', icon: Handshake, badge: 'POPS' },
-  { page: 'about', label: 'About and Mission', icon: BookOpen },
+    ],
+  },
+  {
+    title: 'POPS Core',
+    items: [
+      { page: 'about', label: 'About P.O.P.S.', icon: BookOpen },
+      { page: 'mission', label: 'The Mission', icon: BookOpen },
+      { page: 'doctrine', label: 'The Doctrine', icon: BookOpen },
+      { page: 'howItWorks', label: 'How P.O.P.S. Works', icon: Activity },
+      { page: 'declaration', label: 'Declaration', icon: BookOpen, badge: 'POPS' },
+      { page: 'pledge', label: 'Creed + Pledge', icon: BookOpen, badge: 'POPS' },
+      { page: 'lexicon', label: 'Lexicon + Highlights', icon: BookOpen, badge: 'Guide' },
+      { page: 'access', label: 'Access & Brotherhood', icon: Handshake, badge: 'POPS' },
+    ],
+  },
+  {
+    title: 'Output',
+    items: [
   { page: 'reports', label: 'Reports', icon: FileText },
   { page: 'profile', label: 'Case Profile', icon: User },
+    ],
+  },
 ];
 
 export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
@@ -52,9 +70,10 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
       </div>
       
       <nav>
-        <div className="nav-section">
-          <div className="nav-section-title">Case Management</div>
-          {navItems.map(item => {
+        {navSections.map(section => (
+          <div className="nav-section" key={section.title}>
+            <div className="nav-section-title">{section.title}</div>
+            {section.items.map(item => {
             const Icon = item.icon;
             return (
               <button
@@ -68,7 +87,8 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
               </button>
             );
           })}
-        </div>
+          </div>
+        ))}
         
         <div className="nav-section">
           <div className="nav-section-title">TPC Core</div>
