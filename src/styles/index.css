@@ -274,20 +274,6 @@ body {
   background: radial-gradient(circle at top right, rgba(30, 112, 219, 0.18), transparent 42%), rgba(7, 15, 29, 0.72);
 }
 
-.content-logo-center {
-  position: absolute;
-  top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 74px;
-  height: 74px;
-  object-fit: contain;
-  z-index: 2;
-  opacity: 0.98;
-  filter: drop-shadow(0 0 14px rgba(35, 122, 224, 0.5));
-  pointer-events: none;
-}
-
 .page-header {
   margin-bottom: 28px;
 }
@@ -749,14 +735,6 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 16px;
-}
-
-@media (max-width: 760px) {
-  .content-logo-center {
-    width: 56px;
-    height: 56px;
-    top: 12px;
-  }
 }
 
 .form-group {

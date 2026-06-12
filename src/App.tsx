@@ -64,7 +64,6 @@ function App() {
       <div className="field-bg" />
       <Sidebar currentPage={page} onNavigate={setPage} />
       <main className="main-content">
-        <img src="/popsbadge.png" alt="POPS logo" className="content-logo-center" />
         {pages[page] || <CommandPlaceholder page={page} title={fallback.title} section={fallback.section} />}
       </main>
       <ToastContainer toasts={toasts} />

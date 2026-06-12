@@ -1,4 +1,4 @@
-import { useMemo, useState, type ElementType } from 'react';
+import { useEffect, useMemo, useState, type ElementType } from 'react';
 import {
   Activity,
   AlertTriangle,
@@ -195,6 +195,10 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
     [currentPage]
   );
   const [openSections, setOpenSections] = useState<string[]>(initialOpen);
+
+  useEffect(() => {
+    setOpenSections(initialOpen);
+  }, [initialOpen]);
 
   function toggleSection(section: NavSection) {
     if (!section.items?.length) {
