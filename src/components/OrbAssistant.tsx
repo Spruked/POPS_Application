@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Activity, ExternalLink, Orbit, ShieldCheck, X } from 'lucide-react';
 import { buildOrbLexiconGuidance, POPS_LEXICON_VALIDATION } from '../data/lexicon';
 import { LEXICON_VALIDATION_FAILURE_MESSAGE } from '../data/validatePopsLexicon';
+import { APP_CONTEXT_STATUS, buildAppContextGuidance } from '../data/appContext';
 
 const OLLAMA_BASE_URL = (import.meta.env.VITE_OLLAMA_BASE_URL || 'http://127.0.0.1:11434').replace(/\/$/, '');
 const OLLAMA_MODEL = import.meta.env.VITE_OLLAMA_MODEL || 'llama3.2:1b';
@@ -10,6 +11,10 @@ const ORB_SYSTEM_CONTEXT = `You are the POPS ORB inside a local-first evidence w
 Use the POPS Lexicon as fixed language guidance.
 Answer in plain English, keep guidance factual and court-safe, and do not create legal conclusions.
 When high-sensitivity terms appear, explain them and recommend attorney review before export or filing.
+Use structured local POPS app context only. Do not guess records that are not present.
+Do not delete records. Suggest, draft, create pending records, modify, or export only after user confirmation.
+
+${buildAppContextGuidance()}
 
 ${buildOrbLexiconGuidance()}`;
 
@@ -105,8 +110,8 @@ export default function OrbAssistant() {
             </div>
             <div className="orb-command-tile">
               <ShieldCheck size={15} />
-              <span>Evidence Integrity</span>
-              <strong>Vault Secured</strong>
+              <span>App Context</span>
+              <strong>{APP_CONTEXT_STATUS.available ? 'Local Access Ready' : 'Unavailable'}</strong>
             </div>
             <div className="orb-command-tile">
               <Orbit size={15} />
@@ -118,6 +123,7 @@ export default function OrbAssistant() {
           <div className="orb-command-meta">
             <div><strong>Model:</strong> {OLLAMA_MODEL}</div>
             <div><strong>Endpoint:</strong> {endpoint}</div>
+            <div><strong>Context:</strong> {APP_CONTEXT_STATUS.available ? 'Contacts, calendar, evidence, legal, reports' : 'Unavailable'}</div>
             <div><strong>Reference:</strong> {POPS_LEXICON_VALIDATION.ok ? 'POPS Lexicon loaded' : LEXICON_VALIDATION_FAILURE_MESSAGE}</div>
           </div>
 

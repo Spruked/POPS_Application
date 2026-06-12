@@ -1,6 +1,27 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 
 :root {
+  --pops-bg: #070c17;
+  --pops-bg-2: #0d182c;
+  --pops-panel: #0a1a33;
+  --pops-panel-2: #122443;
+  --pops-border: #1b4d88;
+  --pops-border-soft: rgba(47, 143, 255, 0.24);
+  --pops-border-strong: rgba(47, 143, 255, 0.5);
+  --pops-blue: #2f8fff;
+  --pops-blue-bright: #69b7ff;
+  --pops-blue-soft: rgba(47, 143, 255, 0.14);
+  --pops-gold: #fbbf24;
+  --pops-gold-soft: rgba(251, 191, 36, 0.14);
+  --pops-text: #eaf3ff;
+  --pops-text-soft: #a5bedf;
+  --pops-text-muted: #6f8bb1;
+  --pops-danger: #ef4444;
+  --pops-danger-soft: rgba(239, 68, 68, 0.14);
+  --pops-success: #10b981;
+  --pops-warning: #f59e0b;
+  --pops-shadow-blue: 0 0 28px rgba(47, 143, 255, 0.2);
+  --pops-radius: 8px;
   --bg-primary: #070c17;
   --bg-secondary: #0d182c;
   --bg-tertiary: #122443;
@@ -9,6 +30,7 @@
   --text-primary: #eaf3ff;
   --text-secondary: #a5bedf;
   --text-muted: #6f8bb1;
+  --text-dim: #4f6d96;
   --accent-blue: #2f8fff;
   --accent-green: #34d399;
   --accent-red: #f87171;
@@ -38,7 +60,8 @@ body {
 
 .app-container {
   display: flex;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .global-logo-corner {
@@ -83,17 +106,31 @@ body {
 }
 
 .sidebar {
-  width: 260px;
+  width: 286px;
   background: linear-gradient(180deg, rgba(10, 24, 47, 0.98), rgba(7, 16, 34, 0.98));
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
-  padding: 24px 16px;
+  padding: 16px 14px;
   position: fixed;
   height: 100vh;
   left: 0;
   top: 0;
   z-index: 100;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(47, 143, 255, 0.42) rgba(7, 16, 34, 0.7);
+}
+
+.sidebar-header {
+  flex-shrink: 0;
+}
+
+.sidebar-nav {
+  display: grid;
+  gap: 4px;
+  padding-bottom: 16px;
 }
 
 .sidebar-logo {
@@ -128,7 +165,7 @@ body {
 }
 
 .nav-section {
-  margin-bottom: 8px;
+  margin-bottom: 2px;
 }
 
 .nav-section-title {
@@ -144,13 +181,13 @@ body {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 9px 10px;
   border-radius: var(--radius);
   color: var(--text-secondary);
   text-decoration: none;
   font-size: 14px;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
   cursor: pointer;
   border: none;
   background: none;
@@ -160,6 +197,7 @@ body {
 .nav-item:hover {
   background: rgba(47, 143, 255, 0.1);
   color: var(--text-primary);
+  transform: translateX(1px);
 }
 
 .nav-item.active {
@@ -174,11 +212,64 @@ body {
   flex-shrink: 0;
 }
 
+.nav-section-button {
+  font-weight: 700;
+}
+
+.nav-section-button span {
+  flex: 1;
+  text-align: left;
+}
+
+.nav-chevron {
+  margin-left: auto;
+  opacity: 0.7;
+  transition: transform 0.16s ease;
+}
+
+.nav-chevron.open {
+  transform: rotate(180deg);
+}
+
+.nav-subitems {
+  display: grid;
+  gap: 3px;
+  margin: 3px 0 6px 28px;
+  padding-left: 10px;
+  border-left: 1px solid rgba(47, 143, 255, 0.24);
+}
+
+.nav-subitem {
+  font-size: 12px;
+  padding: 7px 9px;
+  gap: 8px;
+}
+
+.nav-subitem span:first-child {
+  flex: 1;
+  text-align: left;
+}
+
+.nav-badge {
+  margin-left: auto;
+  border: 1px solid rgba(251, 191, 36, 0.42);
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.12);
+  color: var(--accent-amber);
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
 .main-content {
   flex: 1;
-  margin-left: 260px;
+  margin-left: 286px;
   padding: 84px 32px 32px;
-  max-width: calc(100vw - 260px);
+  max-width: calc(100vw - 286px);
+  height: 100vh;
+  overflow-y: auto;
   position: relative;
   background: radial-gradient(circle at top right, rgba(30, 112, 219, 0.18), transparent 42%), rgba(7, 15, 29, 0.72);
 }
@@ -504,6 +595,17 @@ body {
   color: var(--text-secondary);
   padding: 8px 10px;
   font-size: 13px;
+}
+
+.command-placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.command-placeholder-card p {
+  color: var(--text-secondary);
+  line-height: 1.65;
 }
 
 .formal-doc-page {
@@ -1385,6 +1487,75 @@ tbody tr:hover td {
   letter-spacing: 0.9px;
 }
 
+.beam-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid rgba(47, 143, 255, 0.24);
+  border-radius: var(--radius);
+  background: rgba(7, 22, 43, 0.72);
+}
+
+.beam-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  box-shadow: 0 0 10px rgba(47, 143, 255, 0.75);
+}
+
+.beam-dot.hume {
+  background: var(--accent-green);
+  box-shadow: 0 0 10px rgba(52, 211, 153, 0.75);
+}
+
+.beam-dot.kant {
+  background: var(--accent-amber);
+  box-shadow: 0 0 10px rgba(251, 191, 36, 0.75);
+}
+
+.beam-dot.spinoza {
+  background: var(--accent-red);
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.75);
+}
+
+.beam-version,
+.orb-mini-subtext {
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.beam-version {
+  margin-left: auto;
+  font-family: 'Consolas', monospace;
+}
+
+.sidebar-footer {
+  flex-shrink: 0;
+  display: grid;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid rgba(47, 143, 255, 0.2);
+}
+
+.orb-mini {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(47, 143, 255, 0.26);
+  border-radius: var(--radius);
+  background: rgba(7, 22, 43, 0.72);
+}
+
+.orb-mini-text {
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .member-command-shell {
   min-height: calc(100vh - 64px);
   background: radial-gradient(circle at top right, rgba(24, 94, 177, 0.25), transparent 48%), #070c17;
@@ -1598,6 +1769,20 @@ tbody tr:hover td {
 }
 
 @media (max-width: 760px) {
+  .sidebar {
+    width: 236px;
+  }
+
+  .main-content {
+    margin-left: 236px;
+    max-width: calc(100vw - 236px);
+    padding: 74px 18px 24px;
+  }
+
+  .command-placeholder-grid {
+    grid-template-columns: 1fr;
+  }
+
   .mission-hero-card {
     align-items: flex-start;
     flex-direction: column;

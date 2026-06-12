@@ -1,5 +1,5 @@
 import { useState } from "react";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { APP_NAV_LABELS } from "./components/Sidebar";
 import ToastContainer from "./components/ToastContainer";
 import OrbAssistant from "./components/OrbAssistant";
 import Dashboard from "./pages/Dashboard";
@@ -21,23 +21,28 @@ import MemberCommand from "./pages/MemberCommand";
 import Lexicon from "./pages/Lexicon";
 import Declaration from "./pages/Declaration";
 import Pledge from "./pages/Pledge";
+import CommandPlaceholder from "./pages/CommandPlaceholder";
 import { useToast } from "./hooks/useToast";
 import type { Page } from "./types";
 
 function App() {
-  const [page, setPage] = useState<Page>("member");
+  const [page, setPage] = useState<Page>("dashboard");
   const { toasts, show } = useToast();
 
   (window as any).__showToast = show;
 
-  const pages: Record<Page, React.ReactNode> = {
+  const pages: Partial<Record<Page, React.ReactNode>> = {
     dashboard: <Dashboard />,
     evidence: <EvidenceVault />,
     orders: <CourtOrders />,
     violations: <Violations />,
     visitation: <VisitationCalendar />,
+    calendar: <VisitationCalendar />,
+    legal: <CourtOrders />,
     events: <Events />,
     reports: <Reports />,
+    settings: <CommandPlaceholder page="settings" title="Settings" section="Settings" />,
+    contacts: <CommandPlaceholder page="contacts" title="Contacts" section="Contacts" />,
     profile: <Profile />,
     players: <PlayersDossier />,
     incidents: <Incidents />,
@@ -52,13 +57,15 @@ function App() {
     pledge: <Pledge />,
   };
 
+  const fallback = APP_NAV_LABELS[page] || { title: "Command Page", section: "POPS" };
+
   return (
     <div className="app-container">
       <div className="field-bg" />
       <Sidebar currentPage={page} onNavigate={setPage} />
       <main className="main-content">
         <img src="/popsbadge.png" alt="POPS logo" className="content-logo-center" />
-        {pages[page]}
+        {pages[page] || <CommandPlaceholder page={page} title={fallback.title} section={fallback.section} />}
       </main>
       <ToastContainer toasts={toasts} />
       <OrbAssistant />
