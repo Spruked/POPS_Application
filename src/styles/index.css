@@ -1633,6 +1633,11 @@ tbody tr:hover td {
   margin-bottom: 6px;
 }
 
+.member-status-value {
+  font-size: 26px;
+  line-height: 1.12;
+}
+
 .member-stat-delta {
   font-size: 13px;
   color: #2f8fff;

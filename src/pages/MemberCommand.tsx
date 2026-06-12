@@ -1,62 +1,42 @@
-import { CalendarDays, FileText, Gavel, ShieldAlert } from 'lucide-react';
+import { BadgeCheck, Download, KeyRound, Mail, ShieldCheck, Users } from 'lucide-react';
 
-const statCards = [
-  { label: 'Evidence Items', value: 248, delta: '+12 this week', icon: FileText, tone: 'blue' },
-  { label: 'Court Orders', value: 17, delta: 'Active orders', icon: Gavel, tone: 'blue' },
-  { label: 'Violations', value: 5, delta: 'Needs review', icon: ShieldAlert, tone: 'red' },
-  { label: 'Events Logged', value: 63, delta: '+8 this week', icon: CalendarDays, tone: 'blue' },
+const memberCards = [
+  { label: 'Member Account', value: 'Local profile', detail: 'Account portal link and local identity status', icon: Users, tone: 'blue' },
+  { label: 'License Status', value: 'Ready', detail: 'Desktop POPS validates local access token', icon: KeyRound, tone: 'blue' },
+  { label: 'Download Access', value: 'Available', detail: 'Installer and release package access', icon: Download, tone: 'blue' },
+  { label: 'Review Gates', value: 'Active', detail: 'Exports and record changes require confirmation', icon: ShieldCheck, tone: 'red' },
 ] as const;
 
-const activity = [
-  {
-    time: '10:42 AM',
-    title: 'Evidence uploaded: Surveillance Footage_0424.mp4',
-    subtitle: 'Evidence Vault',
-    tag: 'EVIDENCE',
-    tone: 'blue',
-  },
-  {
-    time: '09:15 AM',
-    title: 'Court Order issued by Hon. Ramirez',
-    subtitle: 'Custody Order - CO-2025-0418',
-    tag: 'COURT ORDER',
-    tone: 'blue',
-  },
-  {
-    time: '08:03 AM',
-    title: 'Violation detected: Communication Restriction',
-    subtitle: 'Subject: J.D.  -  Severity: High',
-    tag: 'VIOLATION',
-    tone: 'red',
-  },
-  {
-    time: 'Yesterday',
-    title: 'Event logged: Client Meeting',
-    subtitle: 'Case Strategy Review',
-    tag: 'EVENT',
-    tone: 'blue',
-  },
-] as const;
+const memberActions = [
+  'Member account',
+  'Checkout/payment status',
+  'Download access',
+  'License status',
+  'Newsletter opt-in',
+  'Event registration',
+  'Lifeline request status',
+  'Sponsor history',
+];
 
 export default function MemberCommand() {
   return (
     <div className="member-command-shell">
       <section className="member-header">
         <div>
-          <h2>DASHBOARD</h2>
-          <p>Real-time overview of your case intelligence.</p>
+          <h2>MEMBER COMMAND</h2>
+          <p>Membership, license, download, and account access for the POPS desktop app.</p>
         </div>
         <div className="pipeline-pill">
           <span className="live-dot" />
           <div>
-            <strong>TPC PIPELINE STATUS</strong>
-            <p>Convergence pending</p>
+            <strong>ACCESS STATUS</strong>
+            <p>Local validation ready</p>
           </div>
         </div>
       </section>
 
       <section className="member-stats-grid">
-        {statCards.map((card) => {
+        {memberCards.map((card) => {
           const Icon = card.icon;
           return (
             <article key={card.label} className={`member-stat-card ${card.tone}`}>
@@ -64,47 +44,59 @@ export default function MemberCommand() {
                 <h3>{card.label}</h3>
                 <Icon size={16} />
               </div>
-              <div className="member-stat-value">{card.value}</div>
-              <div className="member-stat-delta">{card.delta}</div>
+              <div className="member-stat-value member-status-value">{card.value}</div>
+              <div className="member-stat-delta">{card.detail}</div>
             </article>
           );
         })}
-      </section>
-
-      <section className="member-activity-card">
-        <div className="member-activity-head">
-          <h3>RECENT ACTIVITY</h3>
-        </div>
-
-        {activity.map((item, idx) => (
-          <div key={item.time + item.title} className="member-activity-row">
-            <div className={`activity-dot ${item.tone}`} />
-            <div className="member-activity-time">{item.time}</div>
-            <div className="member-activity-body">
-              <div className="member-activity-title">{item.title}</div>
-              <div className="member-activity-subtitle">{item.subtitle}</div>
-            </div>
-            <div className={`member-tag ${item.tone}`}>{item.tag}</div>
-            {idx < activity.length - 1 && <div className="row-divider" />}
-          </div>
-        ))}
       </section>
 
       <section className="member-portal-card">
         <h3>WEBSITE MEMBER SYSTEM</h3>
         <p>
           Website handles membership, checkout, newsletter, events, downloads, and license access.
-          Desktop POPS only validates license/access token and links users to account portal actions.
+          Desktop POPS validates license/access token and links users to account portal actions.
         </p>
         <div className="member-chip-wrap">
-          <span className="member-chip">Member account</span>
-          <span className="member-chip">Checkout/payment status</span>
-          <span className="member-chip">Download access</span>
-          <span className="member-chip">License status</span>
-          <span className="member-chip">Newsletter opt-in</span>
-          <span className="member-chip">Event registration</span>
-          <span className="member-chip">Lifeline request status</span>
-          <span className="member-chip">Sponsor history</span>
+          {memberActions.map((action) => (
+            <span className="member-chip" key={action}>{action}</span>
+          ))}
+        </div>
+      </section>
+
+      <section className="member-activity-card">
+        <div className="member-activity-head">
+          <h3>MEMBER FOLLOW-UP</h3>
+        </div>
+
+        <div className="member-activity-row">
+          <div className="activity-dot blue" />
+          <div className="member-activity-time">Portal</div>
+          <div className="member-activity-body">
+            <div className="member-activity-title">Account, license, and download actions stay under Members.</div>
+            <div className="member-activity-subtitle">The main Dashboard remains the app landing page and case overview.</div>
+          </div>
+          <div className="member-tag blue">MEMBERS</div>
+        </div>
+
+        <div className="member-activity-row">
+          <div className="activity-dot blue" />
+          <div className="member-activity-time">Access</div>
+          <div className="member-activity-body">
+            <div className="member-activity-title">Member workflows link out to website account actions when needed.</div>
+            <div className="member-activity-subtitle">Local app records remain separate from public website membership flows.</div>
+          </div>
+          <div className="member-tag blue">ACCESS</div>
+        </div>
+      </section>
+
+      <section className="member-portal-card">
+        <h3>MEMBER CONTROLS</h3>
+        <div className="member-chip-wrap">
+          <span className="member-chip"><BadgeCheck size={14} /> Verify access</span>
+          <span className="member-chip"><KeyRound size={14} /> Check license</span>
+          <span className="member-chip"><Download size={14} /> Download package</span>
+          <span className="member-chip"><Mail size={14} /> Account portal</span>
         </div>
       </section>
     </div>
