@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TPC Cognitive Pipeline — P.O.P.S. ORB Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@300;400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#040d0a;
+  --bg2:#071410;
+  --panel:#0a1e18;
+  --border:#0f3828;
+  --accent:#1dba7e;
+  --accent2:#0f6e56;
+  --accent3:#5dcaa5;
+  --blue:#378add;
+  --blue-dim:#0c447c;
+  --purple:#7f77dd;
+  --amber:#ba7517;
+  --amber-light:#ef9f27;
+  --coral:#d85a30;
+  --red:#e24b4a;
+  --green:#3b6d11;
+  --green-light:#639922;
+  --teal:#1d9e75;
+  --gray:#5f5e5a;
+  --text:#ffffff;
+  --text-dim:#a8c8bc;
+  --text-muted:#7aaa96;
+  --mono:'Share Tech Mono', monospace;
+  --display:'Rajdhani', sans-serif;
+}
+
+html{scroll-behavior:smooth}
+
+body{
+  background:var(--bg);
+  color:var(--text);
+  font-family:var(--display);
+  font-weight:400;
+  min-height:100vh;
+  overflow-x:hidden;
+}
+
+/* Scanline overlay */
+body::before{
+  content:'';
+  position:fixed;
+  inset:0;
+  background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);
+  pointer-events:none;
+  z-index:1000;
+}
+
+/* Ambient glow top */
+body::after{
+  content:'';
+  position:fixed;
+  top:-200px;left:50%;
+  transform:translateX(-50%);
+  width:800px;height:400px;
+  background:radial-gradient(ellipse,rgba(29,186,126,0.08) 0%,transparent 70%);
+  pointer-events:none;
+  z-index:0;
+}
+
+.page{
+  position:relative;
+  z-index:1;
+  max-width:1100px;
+  margin:0 auto;
+  padding:48px 32px 80px;
+}
+
+/* HEADER */
+header{
+  text-align:center;
+  margin-bottom:60px;
+  position:relative;
+}
+
+.header-line{
+  width:1px;height:40px;
+  background:linear-gradient(to bottom,transparent,var(--accent));
+  margin:0 auto 24px;
+}
+
+.system-label{
+  font-family:var(--mono);
+  font-size:13px;
+  letter-spacing:4px;
+  color:var(--accent);
+  text-transform:uppercase;
+  margin-bottom:12px;
+  opacity:0;
+  animation:fadeup 0.6s ease forwards 0.2s;
+}
+
+h1{
+  font-size:clamp(28px,5vw,52px);
+  font-weight:700;
+  letter-spacing:2px;
+  line-height:1.1;
+  color:#fff;
+  text-transform:uppercase;
+  opacity:0;
+  animation:fadeup 0.7s ease forwards 0.4s;
+}
+
+h1 span{color:var(--accent)}
+
+.subtitle{
+  font-family:var(--mono);
+  font-size:14px;
+  color:var(--text-dim);
+  letter-spacing:2px;
+  margin-top:14px;
+  opacity:0;
+  animation:fadeup 0.7s ease forwards 0.6s;
+}
+
+.header-rule{
+  display:flex;align-items:center;gap:16px;
+  margin-top:28px;
+  opacity:0;
+  animation:fadeup 0.7s ease forwards 0.8s;
+}
+.header-rule::before,.header-rule::after{
+  content:'';flex:1;
+  height:1px;background:var(--border);
+}
+.header-rule span{
+  font-family:var(--mono);font-size:12px;
+  color:var(--text-muted);letter-spacing:3px;
+}
+
+/* PIPELINE */
+.pipeline{
+  display:flex;
+  flex-direction:column;
+  gap:0;
+  position:relative;
+}
+
+/* Vertical spine */
+.pipeline::before{
+  content:'';
+  position:absolute;
+  left:50%;top:0;bottom:0;
+  width:1px;
+  background:linear-gradient(to bottom,transparent,var(--border) 5%,var(--border) 95%,transparent);
+  transform:translateX(-50%);
+}
+
+/* STAGE */
+.stage{
+  position:relative;
+  opacity:0;
+  animation:fadeup 0.5s ease forwards;
+}
+
+.stage-connector{
+  display:flex;
+  justify-content:center;
+  padding:6px 0;
+}
+
+.connector-line{
+  width:1px;height:32px;
+  position:relative;
+}
+.connector-line::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  background:var(--accent2);
+}
+.connector-line::after{
+  content:'';
+  position:absolute;
+  bottom:-5px;left:50%;
+  transform:translateX(-50%);
+  border-left:5px solid transparent;
+  border-right:5px solid transparent;
+  border-top:7px solid var(--accent2);
+}
+
+.drift-badge{
+  position:absolute;
+  left:calc(50% + 20px);
+  top:50%;transform:translateY(-50%);
+  font-family:var(--mono);
+  font-size:11px;
+  color:var(--text-muted);
+  letter-spacing:1px;
+  white-space:nowrap;
+  padding:3px 8px;
+  border:1px solid var(--border);
+  border-radius:3px;
+}
+.drift-badge::before{
+  content:'';
+  position:absolute;
+  right:100%;top:50%;
+  width:14px;height:1px;
+  background:var(--border);
+  transform:translateY(-50%);
+}
+
+.stage-card{
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:20px 24px;
+  background:var(--panel);
+  position:relative;
+  overflow:hidden;
+  transition:border-color 0.2s,background 0.2s;
+}
+.stage-card:hover{
+  border-color:var(--accent2);
+  background:#0c1f19;
+}
+
+/* Left accent bar */
+.stage-card::before{
+  content:'';
+  position:absolute;
+  left:0;top:0;bottom:0;
+  width:3px;
+}
+
+.stage-card.c-blue::before{background:var(--blue)}
+.stage-card.c-green::before{background:var(--green-light)}
+.stage-card.c-teal::before{background:var(--teal)}
+.stage-card.c-purple::before{background:var(--purple)}
+.stage-card.c-amber::before{background:var(--amber-light)}
+.stage-card.c-coral::before{background:var(--coral)}
+.stage-card.c-gray::before{background:var(--gray)}
+.stage-card.c-red::before{background:var(--red)}
+.stage-card.c-output::before{background:var(--accent)}
+
+/* Corner glyph */
+.stage-card::after{
+  content:'';
+  position:absolute;
+  right:16px;top:16px;
+  width:32px;height:32px;
+  border-top:1px solid var(--border);
+  border-right:1px solid var(--border);
+  opacity:0.5;
+}
+
+.gate-label{
+  font-family:var(--mono);
+  font-size:12px;
+  letter-spacing:3px;
+  color:var(--text-muted);
+  margin-bottom:6px;
+  text-transform:uppercase;
+}
+
+.stage-title{
+  font-size:20px;
+  font-weight:600;
+  letter-spacing:1px;
+  color:#ffffff;
+  margin-bottom:6px;
+  text-transform:uppercase;
+}
+
+.stage-sub{
+  font-family:var(--mono);
+  font-size:13px;
+  color:#b8d8cc;
+  letter-spacing:0.5px;
+}
+
+/* MODULE ROW */
+.module-row{
+  display:flex;
+  gap:12px;
+  margin-top:16px;
+  flex-wrap:wrap;
+}
+
+.module{
+  flex:1;min-width:120px;
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:12px 14px;
+  position:relative;
+  transition:border-color 0.2s;
+}
+.module:hover{border-color:var(--accent2)}
+
+.module-name{
+  font-size:15px;
+  font-weight:600;
+  letter-spacing:0.5px;
+  color:#ffffff;
+  margin-bottom:4px;
+}
+.module-desc{
+  font-family:var(--mono);
+  font-size:12px;
+  color:var(--text-dim);
+  line-height:1.6;
+}
+
+.module.sidecar{
+  border-style:dashed;
+  opacity:0.75;
+}
+.module.sidecar .module-name::after{
+  content:' [sidecar]';
+  font-size:9px;
+  color:var(--text-muted);
+  font-family:var(--mono);
+}
+
+/* PHILOSOPHER BEAMS */
+.beam-row{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:10px;
+  margin-top:16px;
+}
+
+.beam{
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:14px 12px;
+  text-align:center;
+  position:relative;
+  overflow:hidden;
+  transition:transform 0.2s,border-color 0.2s;
+}
+.beam:hover{
+  transform:translateY(-2px);
+  border-color:var(--accent2);
+}
+
+.beam::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  opacity:0.06;
+}
+.beam.hume::before{background:var(--amber-light)}
+.beam.kant::before{background:var(--blue)}
+.beam.locke::before{background:var(--green-light)}
+.beam.spinoza::before{background:var(--coral)}
+
+.beam-name{
+  font-size:15px;font-weight:700;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+.beam.hume .beam-name{color:var(--amber-light)}
+.beam.kant .beam-name{color:var(--blue)}
+.beam.locke .beam-name{color:var(--green-light)}
+.beam.spinoza .beam-name{color:var(--coral)}
+
+.beam-role{
+  font-family:var(--mono);
+  font-size:12px;
+  color:var(--text-dim);
+  line-height:1.6;
+  color:#b8d8cc;
+}
+
+/* VAULT ROW */
+.vault-row{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr;
+  gap:10px;
+  margin-top:16px;
+}
+
+/* TRIBUNAL */
+.tribunal-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:10px;
+  margin-top:16px;
+}
+.ddr-cell{
+  border:1px solid;
+  border-radius:4px;
+  padding:10px 14px;
+  text-align:center;
+  font-family:var(--mono);
+  font-size:13px;
+}
+.ddr-cell.healthy{border-color:var(--teal);color:var(--teal)}
+.ddr-cell.caution{border-color:var(--amber-light);color:var(--amber-light)}
+.ddr-cell.critical{border-color:var(--red);color:var(--red)}
+
+/* PULSE BAR */
+.pulse-bar{
+  display:flex;
+  align-items:flex-end;
+  gap:3px;
+  height:24px;
+  margin-top:12px;
+  justify-content:center;
+}
+.pulse-bar span{
+  width:6px;
+  background:var(--accent);
+  border-radius:1px;
+  animation:pulse-bar 1.2s ease-in-out infinite;
+}
+.pulse-bar span:nth-child(1){height:6px;animation-delay:0s}
+.pulse-bar span:nth-child(2){height:10px;animation-delay:0.1s}
+.pulse-bar span:nth-child(3){height:18px;animation-delay:0.2s}
+.pulse-bar span:nth-child(4){height:24px;animation-delay:0.3s}
+.pulse-bar span:nth-child(5){height:18px;animation-delay:0.4s}
+.pulse-bar span:nth-child(6){height:10px;animation-delay:0.5s}
+.pulse-bar span:nth-child(7){height:6px;animation-delay:0.6s}
+
+/* OUTPUT */
+.output-row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:12px;
+  margin-top:16px;
+}
+.output-cell{
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:14px 16px;
+}
+.output-cell.primary{border-color:var(--accent2)}
+.output-cell.secondary{border-style:dashed;opacity:0.7}
+
+.output-label{
+  font-family:var(--mono);font-size:11px;
+  letter-spacing:3px;color:var(--text-muted);
+  margin-bottom:6px;text-transform:uppercase;
+}
+.output-name{font-size:16px;font-weight:600;color:#ffffff}
+.output-desc{font-family:var(--mono);font-size:12px;color:var(--text-dim);margin-top:3px}
+
+/* AXIS BADGE */
+.axis-badge{
+  display:inline-block;
+  font-family:var(--mono);font-size:11px;
+  letter-spacing:2px;padding:3px 10px;
+  border-radius:2px;margin-bottom:10px;
+  text-transform:uppercase;
+}
+.axis-badge.a1{background:rgba(55,138,221,0.12);color:var(--blue);border:1px solid rgba(55,138,221,0.25)}
+.axis-badge.a2{background:rgba(99,153,34,0.12);color:var(--green-light);border:1px solid rgba(99,153,34,0.25)}
+.axis-badge.a3{background:rgba(127,119,221,0.12);color:var(--purple);border:1px solid rgba(127,119,221,0.25)}
+
+/* FOOTER */
+footer{
+  margin-top:80px;
+  text-align:center;
+  padding-top:24px;
+  border-top:1px solid var(--border);
+}
+.footer-hash{
+  font-family:var(--mono);font-size:12px;
+  color:var(--text-muted);letter-spacing:2px;
+}
+
+/* ANIMATIONS */
+@keyframes fadeup{
+  from{opacity:0;transform:translateY(16px)}
+  to{opacity:1;transform:translateY(0)}
+}
+@keyframes pulse-bar{
+  0%,100%{opacity:0.4;transform:scaleY(0.7)}
+  50%{opacity:1;transform:scaleY(1)}
+}
+
+.stage:nth-child(1){animation-delay:0.3s}
+.stage:nth-child(2){animation-delay:0.45s}
+.stage:nth-child(3){animation-delay:0.5s}
+.stage:nth-child(4){animation-delay:0.55s}
+.stage:nth-child(5){animation-delay:0.6s}
+.stage:nth-child(6){animation-delay:0.65s}
+.stage:nth-child(7){animation-delay:0.7s}
+.stage:nth-child(8){animation-delay:0.75s}
+.stage:nth-child(9){animation-delay:0.8s}
+.stage:nth-child(10){animation-delay:0.85s}
+.stage:nth-child(11){animation-delay:0.9s}
+.stage:nth-child(12){animation-delay:0.95s}
+.stage:nth-child(13){animation-delay:1.0s}
+.stage:nth-child(14){animation-delay:1.05s}
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="header-line"></div>
+  <div class="system-label">Pro Prime Series · Triple Predicate Cubed</div>
+  <h1>TPC Cognitive Pipeline<br><span>P.O.P.S. ORB Architecture</span></h1>
+  <div class="subtitle">Complete gate sequence · Drift-pinned · Governance-locked</div>
+  <div class="header-rule"><span>v1.0 sealed</span></div>
+</header>
+
+<div class="pipeline">
+
+  <!-- INPUT -->
+  <div class="stage">
+    <div class="stage-card c-gray">
+      <div class="gate-label">Origin</div>
+      <div class="stage-title">Audio / Text Input</div>
+      <div class="stage-sub">Raw signal entering the pipeline — no preprocessing permitted</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 1 -->
+  <div class="stage">
+    <div class="stage-card c-blue">
+      <div class="gate-label">Gate 01 · Axis 1</div>
+      <div class="stage-title">STT Gateway</div>
+      <div class="stage-sub">Speech-to-text · normalized signal source · no cognitive bypass</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">Faster-Whisper</div>
+          <div class="module-desc">Primary STT<br>GPU · CTranslate2<br>No cold start</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Qwen 3 STT</div>
+          <div class="module-desc">Optional secondary<br>STT path</div>
+        </div>
+        <div class="module sidecar">
+          <div class="module-name">CP 3.0</div>
+          <div class="module-desc">Acoustic cognition<br>Optional · enabled<br>or disabled</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 01</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 2 -->
+  <div class="stage">
+    <div class="stage-card c-blue">
+      <div class="axis-badge a1">Axis 1 — Input Trinity</div>
+      <div class="gate-label">Gate 02 · HLSF</div>
+      <div class="stage-title">HLSF Traversal</div>
+      <div class="stage-sub">32³ cube · 18-dimensional vivacity weighting · signal enrichment</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">HLSF Engine</div>
+          <div class="module-desc">Hyperlinked Semantic<br>Field traversal<br>18D space</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Vivacity Weight</div>
+          <div class="module-desc">Signal strength<br>dimensional scoring</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 02</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 3 -->
+  <div class="stage">
+    <div class="stage-card c-blue">
+      <div class="axis-badge a1">Axis 1 — Input Trinity</div>
+      <div class="gate-label">Gate 03 · Depth</div>
+      <div class="stage-title">K0 → K1 → K2 Depth Recursion</div>
+      <div class="stage-sub">Surface → abstract → deep · Hume skepticism increases at K2</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">K0 — Surface</div>
+          <div class="module-desc">Initial pattern<br>recognition layer</div>
+        </div>
+        <div class="module">
+          <div class="module-name">K1 — Abstract</div>
+          <div class="module-desc">Conceptual<br>abstraction layer</div>
+        </div>
+        <div class="module">
+          <div class="module-name">K2 — Deep</div>
+          <div class="module-desc">Maximum skepticism<br>−15% Hume weight</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 03</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 4 — BEAMS -->
+  <div class="stage">
+    <div class="stage-card c-green">
+      <div class="axis-badge a2">Axis 2 — Reasoning Trinity</div>
+      <div class="gate-label">Gate 04 · Four Beams</div>
+      <div class="stage-title">Four Philosopher Beams</div>
+      <div class="stage-sub">Simultaneous · independent · no cross-contamination · DDR monitored</div>
+      <div class="beam-row">
+        <div class="beam hume">
+          <div class="beam-name">Hume</div>
+          <div class="beam-role">Empirical skepticism<br>Probabilistic state<br>Impression-grounded<br>Causal uncertainty</div>
+        </div>
+        <div class="beam kant">
+          <div class="beam-name">Kant</div>
+          <div class="beam-role">Categorical framework<br>Transcendental analytic<br>A priori structure<br>Duty-bound</div>
+        </div>
+        <div class="beam locke">
+          <div class="beam-name">Locke</div>
+          <div class="beam-role">Empirical grounding<br>Evidence-based<br>Observation-first<br>Tabula rasa</div>
+        </div>
+        <div class="beam spinoza">
+          <div class="beam-name">Spinoza</div>
+          <div class="beam-role">Systematic unity<br>Bounded coherence<br>Deterministic<br>Monist lens</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 04</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 5 -->
+  <div class="stage">
+    <div class="stage-card c-teal">
+      <div class="axis-badge a2">Axis 2 — Reasoning Trinity</div>
+      <div class="gate-label">Gate 05 · Coherence</div>
+      <div class="stage-title">Phase Coherence Check</div>
+      <div class="stage-sub">Cross-beam alignment · DDR &gt; 0.8 healthy · &lt; 0.5 critical halt</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">Coherence Score</div>
+          <div class="module-desc">Vector alignment<br>across all 4 beams</div>
+        </div>
+        <div class="module">
+          <div class="module-name">DDR Metric</div>
+          <div class="module-desc">Doctrine Drift Rate<br>observed / expected</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Phase Monitor</div>
+          <div class="module-desc">Lens independence<br>verification</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 05</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 6 -->
+  <div class="stage">
+    <div class="stage-card c-teal">
+      <div class="axis-badge a2">Axis 2 — Reasoning Trinity</div>
+      <div class="gate-label">Gate 06 · EGF</div>
+      <div class="stage-title">EGF Certainty Gravity</div>
+      <div class="stage-sub">Epistemic Gravity Field · vault retrieval physics · certainty field computation</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">EGF Engine</div>
+          <div class="module-desc">Certainty gravity<br>field generator</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Retrieval Physics</div>
+          <div class="module-desc">Pulls matching vault<br>records into range</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 06</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 7 — VAULTS -->
+  <div class="stage">
+    <div class="stage-card c-purple">
+      <div class="axis-badge a3">Axis 3 — Resolution Trinity</div>
+      <div class="gate-label">Gate 07 · Vaults</div>
+      <div class="stage-title">Geometric Glyph + Vault Retrieval</div>
+      <div class="stage-sub">Phasor coordinates · glyph signatures · vault cross-reference</div>
+      <div class="vault-row">
+        <div class="module">
+          <div class="module-name">Glyph Engine</div>
+          <div class="module-desc">Geometric signature<br>generation · phasor<br>coordinate system</div>
+        </div>
+        <div class="module">
+          <div class="module-name">A Priori Vault</div>
+          <div class="module-desc">Seeded legal substrate<br>approved structure<br>immutable base</div>
+        </div>
+        <div class="module">
+          <div class="module-name">A Posteriori Vault</div>
+          <div class="module-desc">Case evidence<br>user records<br>violation log</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 07</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 8 — ECM -->
+  <div class="stage">
+    <div class="stage-card c-amber">
+      <div class="axis-badge a3">Axis 3 — Resolution Trinity</div>
+      <div class="gate-label">Gate 08 · ECM</div>
+      <div class="stage-title">ECM Epistemic Validation</div>
+      <div class="stage-sub">Fires on genuine novelty or incoherence only · ethically pre-pruned output</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">ECM Gate</div>
+          <div class="module-desc">Epistemic Contract<br>Machine · novelty<br>detection</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Violation Check</div>
+          <div class="module-desc">Contract boundary<br>enforcement</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Escalation</div>
+          <div class="module-desc">Flags incoherence<br>for tribunal review</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 08</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- OPTIONAL LLM -->
+  <div class="stage">
+    <div class="stage-card c-gray">
+      <div class="gate-label">Optional · Articulation Only</div>
+      <div class="stage-title">LLM Articulation Layer</div>
+      <div class="stage-sub">Llama 3.2 1B · pure GPU · no cold start · articulation only — NOT reasoning</div>
+      <div class="module-row">
+        <div class="module sidecar">
+          <div class="module-name">Llama 3.2 1B</div>
+          <div class="module-desc">Local GPU inference<br>Faster-Whisper stack<br>Sub-100ms first token</div>
+        </div>
+        <div class="module sidecar">
+          <div class="module-name">API LLM</div>
+          <div class="module-desc">Optional · governed<br>same wrapper applies</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- GATE 9 — RECONCILIATION -->
+  <div class="stage">
+    <div class="stage-card c-coral">
+      <div class="gate-label">Gate 09 · Final Authority</div>
+      <div class="stage-title">TPC Reconciliation Shield</div>
+      <div class="stage-sub">Governance boundary check · no bypass from UI, LLM, TTS, or voice layer</div>
+      <div class="module-row">
+        <div class="module">
+          <div class="module-name">Reconciliation</div>
+          <div class="module-desc">Final semantic<br>contract check</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Boundary Gate</div>
+          <div class="module-desc">Advice boundary<br>enforcement</div>
+        </div>
+        <div class="module">
+          <div class="module-name">Output Seal</div>
+          <div class="module-desc">Geometrically<br>verified output</div>
+        </div>
+      </div>
+      <div class="drift-badge">drift ping 09</div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- TRIBUNAL -->
+  <div class="stage">
+    <div class="stage-card c-red">
+      <div class="gate-label">Synthesis · Final Output</div>
+      <div class="stage-title">Tribunal Synthesizer</div>
+      <div class="stage-sub">Coherence pulse · DDR metric · final governed output · visual status indicator</div>
+      <div class="tribunal-grid">
+        <div class="ddr-cell healthy">DDR &gt; 0.8<br>Healthy · independent</div>
+        <div class="ddr-cell caution">DDR 0.5–0.8<br>Caution · correlating</div>
+        <div class="ddr-cell critical">DDR &lt; 0.5<br>Critical · monoculture</div>
+      </div>
+      <div class="pulse-bar">
+        <span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="stage-connector"><div class="connector-line"></div></div>
+  </div>
+
+  <!-- OUTPUT -->
+  <div class="stage">
+    <div class="stage-card c-output">
+      <div class="gate-label">Output Layer</div>
+      <div class="stage-title">Voice + Screen Output</div>
+      <div class="stage-sub">Phonatory bridge · primary and backup TTS · frontend renderer</div>
+      <div class="output-row">
+        <div class="output-cell primary">
+          <div class="output-label">Primary TTS</div>
+          <div class="output-name">Qwen Engine</div>
+          <div class="output-desc">Primary voice output path<br>Latency meter active</div>
+        </div>
+        <div class="output-cell">
+          <div class="output-label">Screen</div>
+          <div class="output-name">Frontend Renderer</div>
+          <div class="output-desc">React · PipelineDashboard<br>Visual truth panel</div>
+        </div>
+        <div class="output-cell secondary">
+          <div class="output-label">Backup TTS</div>
+          <div class="output-name">Kokoro Engine</div>
+          <div class="output-desc">Secondary · fallback<br>Online / Offline</div>
+        </div>
+        <div class="output-cell secondary">
+          <div class="output-label">Bridge</div>
+          <div class="output-name">Phonatory Bridge</div>
+          <div class="output-desc">Output routing<br>Voice selection</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  <div class="footer-hash">Pro Prime Series AI · Triple Predicate Cubed · Doctrine v1.0 Sealed · SHA256: b601457ace7f0639</div>
+</footer>
+
+</div>
+</body>
+</html>

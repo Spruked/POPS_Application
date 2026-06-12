@@ -1,0 +1,47 @@
+﻿proof_of_presence structure
+===========================
+
+.
+|-- .gitignore
+|-- .env.example
+|-- README.md
+|-- package.json
+|-- package-lock.json
+|-- tsconfig.json
+|-- tsconfig.node.json
+|-- vite.config.ts
+|-- index.html
+|-- website_member_schema.sql
+|-- src/
+|   |-- App.tsx
+|   |-- main.tsx
+|   |-- types.ts
+|   |-- components/
+|   |   |-- Modal.tsx
+|   |   |-- OrbAssistant.tsx
+|   |   |-- Sidebar.tsx
+|   |   `-- ToastContainer.tsx
+|   |-- hooks/
+|   |-- pages/
+|   |-- styles/
+|   `-- utils/
+|-- src-tauri/
+|   |-- Cargo.toml
+|   |-- build.rs
+|   |-- tauri.conf.json
+|   |-- icons/
+|   `-- src/main.rs
+`-- Triple_Predicate_Cubed/
+    |-- tpc_structure.txt
+    `-- tpc_website_orb/
+        |-- backend/
+        |-- engines/
+        |-- frontend/
+        |-- rust_substrate/
+        `-- tpc_core/
+
+Generated folders intentionally omitted from this snapshot:
+- node_modules/
+- dist/
+- src-tauri/target/
+- __pycache__/
