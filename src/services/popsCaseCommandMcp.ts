@@ -1,4 +1,4 @@
-import { invokeTauri } from '../utils/tauriHelpers';
+import { invoke } from '@tauri-apps/api/tauri';
 
 export type CaseCommandAuthority = 'read' | 'draft' | 'write' | 'receipt';
 
@@ -36,6 +36,11 @@ function find(records: unknown[], search: string, fields: string[]) {
   });
 }
 
+async function localRead(command: string): Promise<unknown[]> {
+  const data = await invoke<unknown>(command);
+  return Array.isArray(data) ? data : [];
+}
+
 export async function runCaseCommand(request: CaseCommandRequest): Promise<CaseCommandResult> {
   const createdAt = new Date().toISOString();
   const search = String(request.args?.search ?? '');
@@ -53,25 +58,24 @@ export async function runCaseCommand(request: CaseCommandRequest): Promise<CaseC
 
   try {
     if (request.tool === 'pops.contacts.search') {
-      const records = await invokeTauri('get_players_dossier');
-      const matches = find(records as unknown[], search, ['name', 'role', 'organization', 'phoneNumbers', 'emails', 'relationshipToCase']);
+      const records = await localRead('get_players_dossier');
+      const matches = find(records, search, ['name', 'role', 'organization', 'phoneNumbers', 'emails', 'relationshipToCase']);
       return { ok: true, tool: request.tool, authority: 'read', message: `${matches.length} contact record(s) found.`, records: matches, createdAt };
     }
 
     if (request.tool === 'pops.calls.list') {
-      const records = await invokeTauri('get_communication_records');
-      const matches = find(records as unknown[], search, ['title', 'participants', 'courtSafeSummary', 'firstTimestamp', 'lastTimestamp']);
+      const records = await localRead('get_communication_records');
+      const matches = find(records, search, ['title', 'participants', 'courtSafeSummary', 'firstTimestamp', 'lastTimestamp']);
       return { ok: true, tool: request.tool, authority: 'read', message: `${matches.length} call or communication record(s) found.`, records: matches, createdAt };
     }
 
     if (request.tool === 'pops.documents.search') {
-      const records = await invokeTauri('get_evidence');
-      const matches = find(records as unknown[], search, ['title', 'description', 'tags', 'fileName', 'sourceDescription', 'date']);
+      const records = await localRead('get_evidence');
+      const matches = find(records, search, ['title', 'description', 'tags', 'fileName', 'sourceDescription', 'date']);
       return { ok: true, tool: request.tool, authority: 'read', message: `${matches.length} document record(s) found.`, records: matches, createdAt };
     }
 
-    const records = await invokeTauri('get_events');
-    const allEvents = records as unknown[];
+    const allEvents = await localRead('get_events');
     if (request.tool === 'pops.timeline.query') {
       const matches = find(allEvents, search, ['title', 'description', 'type', 'date']);
       return { ok: true, tool: request.tool, authority: 'read', message: `${matches.length} timeline record(s) found.`, records: matches, createdAt };
