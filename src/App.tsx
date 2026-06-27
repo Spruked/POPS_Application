@@ -1,6 +1,7 @@
 import { useState } from "react";
 import "./styles/pops-assistant.css";
 import "./styles/pops-assistant-fit.css";
+import "./styles/pops-assistant-controls.css";
 import Sidebar, { APP_NAV_LABELS } from "./components/Sidebar";
 import ToastContainer from "./components/ToastContainer";
 import PopsAssistant from "./components/PopsAssistant";
