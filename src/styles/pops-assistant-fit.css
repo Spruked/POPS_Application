@@ -1,0 +1,80 @@
+/* Keep the Pops! dock self-contained at shorter desktop window heights. */
+.pops-assistant-shell {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pops-conversation {
+  flex: 0 1 146px;
+  min-height: 0;
+  max-height: 146px;
+}
+
+.pops-action-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(81, 164, 255, 0.65) transparent;
+}
+
+.pops-composer,
+.pops-engine {
+  flex: 0 0 auto;
+}
+
+.pops-engine-options {
+  max-height: min(224px, 28vh);
+  overflow-y: auto;
+  padding-right: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(81, 164, 255, 0.65) transparent;
+}
+
+@media (max-height: 800px) {
+  .pops-assistant-dock {
+    top: 12px;
+    bottom: 12px;
+  }
+
+  .pops-assistant-shell {
+    gap: 8px;
+    padding: 14px;
+  }
+
+  .pops-wordmark {
+    font-size: 34px;
+  }
+
+  .pops-presence-mark {
+    width: 52px;
+    height: 52px;
+    font-size: 22px;
+  }
+
+  .pops-private-status {
+    padding: 8px 10px;
+  }
+
+  .pops-private-status span {
+    font-size: 10px;
+  }
+
+  .pops-conversation {
+    flex-basis: 96px;
+    max-height: 96px;
+  }
+
+  .pops-action-card {
+    padding: 8px;
+  }
+
+  .pops-action-copy small {
+    display: none;
+  }
+
+  .pops-composer textarea {
+    min-height: 54px;
+  }
+}
