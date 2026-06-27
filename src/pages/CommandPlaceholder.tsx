@@ -1,4 +1,5 @@
 import type { Page } from '../types';
+import CommunityBridge from './CommunityBridge';
 
 interface CommandPlaceholderProps {
   page: Page;
@@ -34,8 +35,8 @@ const orbRules = [
 ];
 
 function getIndicators(page: Page, section: string) {
-  if (section === 'Contacts') return contactsIndicators;
-  if (section === 'Calendar') return calendarIndicators;
+  if (section === 'Contacts' || section === 'People & Dossiers') return contactsIndicators;
+  if (section === 'Calendar' || section === 'Case Calendar') return calendarIndicators;
   if (page === 'settingsOrbAssistant') return orbRules;
   return [
     'Local-first data model',
@@ -48,6 +49,8 @@ function getIndicators(page: Page, section: string) {
 }
 
 export default function CommandPlaceholder({ page, title, section }: CommandPlaceholderProps) {
+  if (page === 'membersBrotherhood') return <CommunityBridge />;
+
   const indicators = getIndicators(page, section);
 
   return (
