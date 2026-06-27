@@ -68,14 +68,14 @@ const QUICK_ACTIONS: QuickAction[] = [
   {
     id: "order",
     label: "Review court orders",
-    detail: "Find terms, references, and linked case material",
+    detail: "Find terms, references, and linked material",
     page: "orders",
     icon: Gavel,
   },
   {
     id: "timeline",
     label: "Prepare a timeline entry",
-    detail: "Add a factual event for your case record",
+    detail: "Add a factual event to your record",
     page: "events",
     icon: FilePlus2,
   },
@@ -116,7 +116,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
     {
       id: "welcome",
       role: "assistant",
-      text: "I’m here to help you organize your case work. We can start a record, prepare a draft, find a section, or work through the page you are on.",
+      text: "I’m here to help you organize your records, prepare a draft, find a section, or work through the page you are on.",
     },
   ]);
   const [input, setInput] = useState("");
@@ -166,12 +166,12 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
   const modeLabel = mode === "core" ? "Core Guided Mode" : mode === "local" ? "Recommended Local Model" : "Custom API Model";
 
   return (
-    <aside className="pops-assistant-dock" aria-label="Pops case-work assistant">
+    <aside className="pops-assistant-dock" aria-label="Pops private guide">
       <div className="pops-assistant-shell">
         <header className="pops-assistant-header">
           <div>
             <div className="pops-wordmark">Pops!</div>
-            <p>Your private case-work assistant</p>
+            <p>Your private guide</p>
           </div>
           <div className="pops-presence-mark" aria-hidden="true"><span>P</span></div>
         </header>
@@ -193,7 +193,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
           ))}
         </section>
 
-        <section className="pops-action-list" aria-label="Suggested case actions">
+        <section className="pops-action-list" aria-label="Suggested things to do">
           {QUICK_ACTIONS.map((action) => {
             const Icon = action.icon;
             return (
