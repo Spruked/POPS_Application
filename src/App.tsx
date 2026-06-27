@@ -34,6 +34,8 @@ function App() {
 
   (window as any).__showToast = show;
 
+  const contactsDossier = <PlayersDossier />;
+
   const pages: Partial<Record<Page, React.ReactNode>> = {
     dashboard: <Dashboard />,
     evidence: <EvidenceVault />,
@@ -45,9 +47,23 @@ function App() {
     events: <Events />,
     reports: <Reports />,
     settings: <Settings />,
-    contacts: <CommandPlaceholder page="contacts" title="Contacts" section="Contacts" />,
+    contacts: contactsDossier,
+    contactsAll: contactsDossier,
+    contactsAttorneys: contactsDossier,
+    contactsCourtClerk: contactsDossier,
+    contactsJudges: contactsDossier,
+    contactsOtherParent: contactsDossier,
+    contactsChildren: contactsDossier,
+    contactsMedical: contactsDossier,
+    contactsSchool: contactsDossier,
+    contactsWitnesses: contactsDossier,
+    contactsSupportAgency: contactsDossier,
+    contactsLawEnforcement: contactsDossier,
+    contactsAdvocates: contactsDossier,
+    contactsRequired: contactsDossier,
+    contactsHistory: contactsDossier,
     profile: <Profile />,
-    players: <PlayersDossier />,
+    players: contactsDossier,
     incidents: <Incidents />,
     about: <AboutMission />,
     mission: <Mission />,
