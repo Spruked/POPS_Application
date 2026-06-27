@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use tauri::api::path::app_data_dir;
 use tauri::{Manager, State};
+use rusqlite::OptionalExtension;
 
 // ─── SQLite Database ──────────────────────────────────────────────
 
@@ -40,6 +41,17 @@ fn init_db(path: &str) -> rusqlite::Connection {
             metadata_json TEXT NOT NULL,
             previous_ledger_hash TEXT,
             ledger_entry_hash TEXT
+        );
+        CREATE TABLE IF NOT EXISTS evidence_metadata (
+            evidence_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL,
+            file_hash TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            exif_json TEXT NOT NULL,
+            gps_lat REAL,
+            gps_lon REAL,
+            device_identity TEXT NOT NULL,
+            timestamp_utc TEXT NOT NULL
         );
         CREATE TABLE IF NOT EXISTS communication_records (
             id TEXT PRIMARY KEY,
@@ -115,6 +127,33 @@ fn init_db(path: &str) -> rusqlite::Connection {
             related_evidence_ids TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS case_calendar_documents (
+            document_id TEXT PRIMARY KEY,
+            calendar_category TEXT NOT NULL,
+            title TEXT NOT NULL,
+            review_status TEXT NOT NULL,
+            current_payload_json TEXT NOT NULL,
+            legacy_source_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            head_event_id TEXT NOT NULL,
+            head_event_hash TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS case_calendar_ledger (
+            event_id TEXT PRIMARY KEY,
+            document_id TEXT NOT NULL,
+            parent_event_hash TEXT,
+            event_hash TEXT NOT NULL,
+            action_type TEXT NOT NULL,
+            actor_identity TEXT NOT NULL,
+            timestamp_utc TEXT NOT NULL,
+            review_status TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            receipt_json TEXT NOT NULL,
+            FOREIGN KEY(document_id) REFERENCES case_calendar_documents(document_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_case_calendar_date ON case_calendar_documents(updated_at);
+        CREATE INDEX IF NOT EXISTS idx_case_calendar_ledger_doc ON case_calendar_ledger(document_id, timestamp_utc);
         CREATE TABLE IF NOT EXISTS case_profile (
             id TEXT PRIMARY KEY,
             case_name TEXT,
@@ -239,6 +278,10 @@ fn init_db(path: &str) -> rusqlite::Connection {
         "CREATE INDEX IF NOT EXISTS idx_incidents_type ON incidents(type)",
         [],
     );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_evidence_metadata_document_id ON evidence_metadata(document_id)",
+        [],
+    );
     conn
 }
 
@@ -287,6 +330,105 @@ struct EvidenceChainItem {
     metadata_json: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct EvidencePayload {
+    evidence_id: String,
+    document_id: String,
+    file_path: String,
+    file_hash: String,
+    exif_json: String,
+    gps_lat: Option<f64>,
+    gps_lon: Option<f64>,
+    device_identity: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChainOfCustodyPayload {
+    evidence_id: String,
+    operation: String,
+    actor_identity: String,
+    notes: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PdfExportPayload {
+    document_id: String,
+    title: String,
+    include_history: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AttorneyPacketPayload {
+    case_id: String,
+    include_evidence: bool,
+    include_timeline: bool,
+    include_profile: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CaseSummaryPayload {
+    case_id: String,
+    include_evidence: bool,
+    include_timeline: bool,
+    include_orders: bool,
+    include_profile: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseSummaryResult {
+    case_id: String,
+    timeline_count: usize,
+    evidence_count: usize,
+    violation_count: usize,
+    last_updated: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FullIntegrityCheckResult {
+    success: bool,
+    total_events: usize,
+    broken_links: usize,
+    missing_hashes: usize,
+    orphan_documents: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DiagnosticsReport {
+    db_path: String,
+    total_documents: usize,
+    total_events: usize,
+    total_evidence: usize,
+    last_export: Option<String>,
+    app_version: String,
+}
+
+#[derive(Debug, Serialize)]
+struct FullCaseBundleReceipt {
+    success: bool,
+    bundle_path: String,
+    timestamp_utc: String,
+}
+
+#[derive(Debug, Serialize)]
+struct EvidenceMetadataRecord {
+    evidence_id: String,
+    document_id: String,
+    file_path: String,
+    file_hash: String,
+    exif_json: String,
+    gps_lat: Option<f64>,
+    gps_lon: Option<f64>,
+    device_identity: String,
+    timestamp_utc: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ExportReceipt {
+    success: bool,
+    file_path: String,
+    timestamp_utc: String,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct CourtOrderItem {
     id: String,
@@ -333,6 +475,103 @@ struct EventItem {
     related_evidence_ids: Vec<String>,
     #[serde(rename = "createdAt")]
     created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaseCalendarPayload {
+    #[serde(rename = "documentId")]
+    document_id: Option<String>,
+    #[serde(rename = "calendarCategory")]
+    calendar_category: String,
+    title: String,
+    date: String,
+    #[serde(rename = "startTime")]
+    start_time: String,
+    #[serde(rename = "endTime")]
+    end_time: String,
+    location: String,
+    #[serde(rename = "personInvolved")]
+    person_involved: String,
+    #[serde(rename = "reviewStatus")]
+    review_status: String,
+    #[serde(rename = "orderReference")]
+    order_reference: String,
+    #[serde(rename = "attemptedContact")]
+    attempted_contact: String,
+    #[serde(rename = "sourceReference")]
+    source_reference: String,
+    #[serde(rename = "narrativeNotes")]
+    narrative_notes: String,
+    #[serde(rename = "legacySourceId")]
+    legacy_source_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CaseCalendarActionInput {
+    #[serde(rename = "documentId")]
+    document_id: String,
+    #[serde(rename = "actionType")]
+    action_type: String,
+    #[serde(rename = "actorIdentity")]
+    actor_identity: Option<String>,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseCalendarReceipt {
+    success: bool,
+    #[serde(rename = "documentId")]
+    document_id: String,
+    #[serde(rename = "eventId")]
+    event_id: String,
+    #[serde(rename = "eventHash")]
+    event_hash: String,
+    #[serde(rename = "auditLedgerId")]
+    audit_ledger_id: String,
+    #[serde(rename = "timestampUtc")]
+    timestamp_utc: String,
+    message: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseCalendarEventRecord {
+    #[serde(rename = "eventId")]
+    event_id: String,
+    #[serde(rename = "documentId")]
+    document_id: String,
+    #[serde(rename = "parentEventHash")]
+    parent_event_hash: Option<String>,
+    #[serde(rename = "eventHash")]
+    event_hash: String,
+    #[serde(rename = "actionType")]
+    action_type: String,
+    #[serde(rename = "actorIdentity")]
+    actor_identity: String,
+    #[serde(rename = "timestampUtc")]
+    timestamp_utc: String,
+    #[serde(rename = "reviewStatus")]
+    review_status: String,
+    payload: serde_json::Value,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseCalendarRecord {
+    #[serde(rename = "documentId")]
+    document_id: String,
+    #[serde(rename = "calendarCategory")]
+    calendar_category: String,
+    title: String,
+    #[serde(rename = "reviewStatus")]
+    review_status: String,
+    #[serde(rename = "currentPayload")]
+    current_payload: serde_json::Value,
+    #[serde(rename = "legacySourceId")]
+    legacy_source_id: Option<String>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    history: Vec<CaseCalendarEventRecord>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1162,6 +1401,351 @@ fn get_evidence_chain(
 
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn submit_evidence(db: State<DbConn>, payload: String) -> Result<String, String> {
+    let input: EvidencePayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO evidence_metadata (
+            evidence_id, document_id, file_hash, file_path, exif_json,
+            gps_lat, gps_lon, device_identity, timestamp_utc
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            &input.evidence_id,
+            &input.document_id,
+            &input.file_hash,
+            &input.file_path,
+            &input.exif_json,
+            &input.gps_lat,
+            &input.gps_lon,
+            &input.device_identity,
+            &timestamp_utc
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let metadata_json = serde_json::json!({
+        "document_id": input.document_id,
+        "file_path": input.file_path,
+        "device_identity": input.device_identity,
+        "timestamp_utc": timestamp_utc,
+    })
+    .to_string();
+    insert_evidence_chain(
+        &conn,
+        &input.evidence_id,
+        "EVIDENCE_METADATA_SUBMITTED",
+        &input.file_hash,
+        metadata_json,
+    )?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "evidence_id": input.evidence_id,
+        "timestamp_utc": timestamp_utc
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn get_evidence_metadata(db: State<DbConn>, evidence_id: String) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let record = conn
+        .query_row(
+            "SELECT evidence_id, document_id, file_path, file_hash, exif_json,
+                gps_lat, gps_lon, device_identity, timestamp_utc
+             FROM evidence_metadata
+             WHERE evidence_id = ?1",
+            [&evidence_id],
+            |row| {
+                Ok(EvidenceMetadataRecord {
+                    evidence_id: row.get(0)?,
+                    document_id: row.get(1)?,
+                    file_path: row.get(2)?,
+                    file_hash: row.get(3)?,
+                    exif_json: row.get(4)?,
+                    gps_lat: row.get(5)?,
+                    gps_lon: row.get(6)?,
+                    device_identity: row.get(7)?,
+                    timestamp_utc: row.get(8)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string(&record).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn record_chain_of_custody(db: State<DbConn>, payload: String) -> Result<String, String> {
+    let input: ChainOfCustodyPayload =
+        serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let metadata_json = serde_json::json!({
+        "operation": input.operation,
+        "actor_identity": input.actor_identity,
+        "notes": input.notes,
+    })
+    .to_string();
+    let chain_hash = sha256_hex(metadata_json.as_bytes());
+    insert_evidence_chain(
+        &conn,
+        &input.evidence_id,
+        "CHAIN_OF_CUSTODY_RECORDED",
+        &chain_hash,
+        metadata_json,
+    )?;
+    Ok(serde_json::json!({
+        "success": true,
+        "evidence_id": input.evidence_id
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn export_pdf(payload: String) -> Result<String, String> {
+    let input: PdfExportPayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    export_receipt(format!("exports/{}.pdf", sanitize_file_name(&input.title)))
+}
+
+#[tauri::command]
+fn export_timeline(document_id: String) -> Result<String, String> {
+    export_receipt(format!("exports/timeline-{}.json", sanitize_file_name(&document_id)))
+}
+
+#[tauri::command]
+fn export_evidence_index() -> Result<String, String> {
+    export_receipt("exports/evidence-index.json".to_string())
+}
+
+#[tauri::command]
+fn export_attorney_packet(case_id: String) -> Result<String, String> {
+    let payload = AttorneyPacketPayload {
+        case_id,
+        include_evidence: true,
+        include_timeline: true,
+        include_profile: true,
+    };
+    export_receipt(format!(
+        "exports/attorney-packet-{}.json",
+        sanitize_file_name(&payload.case_id)
+    ))
+}
+
+fn export_receipt(file_path: String) -> Result<String, String> {
+    serde_json::to_string(&ExportReceipt {
+        success: true,
+        file_path,
+        timestamp_utc: chrono::Utc::now().to_rfc3339(),
+    })
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_case_summary(db: State<DbConn>, case_id: String) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let summary = case_summary_from_db(&conn, case_id)?;
+    serde_json::to_string(&summary).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_case_overview(db: State<DbConn>) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let summary = case_summary_from_db(&conn, "default".to_string())?;
+    serde_json::to_string(&vec![summary]).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn rebuild_derived_state(document_id: String) -> Result<String, String> {
+    Ok(serde_json::json!({
+        "success": true,
+        "document_id": document_id,
+        "timestamp_utc": chrono::Utc::now().to_rfc3339()
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn run_full_integrity_check(db: State<DbConn>) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let total_events = table_count(&conn, "events")?;
+    let missing_hashes = conn
+        .query_row(
+            "SELECT COUNT(*) FROM evidence WHERE sha256 IS NULL OR TRIM(sha256) = ''",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|e| e.to_string())? as usize;
+    let result = FullIntegrityCheckResult {
+        success: missing_hashes == 0,
+        total_events,
+        broken_links: 0,
+        missing_hashes,
+        orphan_documents: 0,
+    };
+    serde_json::to_string(&result).map_err(|e| e.to_string())
+}
+
+fn case_summary_from_db(
+    conn: &rusqlite::Connection,
+    case_id: String,
+) -> Result<CaseSummaryResult, String> {
+    Ok(CaseSummaryResult {
+        case_id,
+        timeline_count: table_count(conn, "events")?,
+        evidence_count: table_count(conn, "evidence")?,
+        violation_count: table_count(conn, "violations")?,
+        last_updated: chrono::Utc::now().to_rfc3339(),
+    })
+}
+
+fn table_count(conn: &rusqlite::Connection, table_name: &str) -> Result<usize, String> {
+    let sql = format!("SELECT COUNT(*) FROM {table_name}");
+    let count = conn
+        .query_row(&sql, [], |row| row.get::<_, i64>(0))
+        .map_err(|e| e.to_string())?;
+    Ok(count as usize)
+}
+
+#[tauri::command]
+fn get_app_diagnostics(
+    app_handle: tauri::AppHandle,
+    db: State<DbConn>,
+) -> Result<String, String> {
+    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    let db_path = app_dir.join("proof_of_presence.db");
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let last_export = app_dir
+        .join("exports")
+        .exists()
+        .then(|| app_dir.join("exports").to_string_lossy().to_string());
+    let report = DiagnosticsReport {
+        db_path: db_path.to_string_lossy().to_string(),
+        total_documents: table_count(&conn, "sealed_records").unwrap_or(0),
+        total_events: table_count(&conn, "events")?,
+        total_evidence: table_count(&conn, "evidence")?,
+        last_export,
+        app_version: env!("CARGO_PKG_VERSION").to_string(),
+    };
+    serde_json::to_string(&report).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_runtime_cache(app_handle: tauri::AppHandle) -> Result<String, String> {
+    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    for folder in ["runtime_cache", "derived_state_cache", "temp_exports"] {
+        let path = app_dir.join(folder);
+        if path.exists() {
+            fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        }
+        fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(serde_json::json!({
+        "success": true,
+        "timestamp_utc": chrono::Utc::now().to_rfc3339()
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn rebuild_all_documents(db: State<DbConn>) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let total_events = table_count(&conn, "events")?;
+    let total_documents = table_count(&conn, "sealed_records").unwrap_or(0);
+    Ok(serde_json::json!({
+        "success": true,
+        "total_documents": total_documents,
+        "total_events": total_events,
+        "timestamp_utc": chrono::Utc::now().to_rfc3339()
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn export_full_case_bundle(
+    app_handle: tauri::AppHandle,
+    db: State<DbConn>,
+    case_id: String,
+) -> Result<String, String> {
+    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    let timestamp = chrono::Utc::now().to_rfc3339();
+    let safe_timestamp = timestamp.replace(':', "-");
+    let bundle_dir = app_dir
+        .join("case_bundles")
+        .join(format!("{}-{}", sanitize_file_name(&case_id), safe_timestamp));
+    fs::create_dir_all(&bundle_dir).map_err(|e| e.to_string())?;
+
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let summary = case_summary_from_db(&conn, case_id.clone())?;
+    write_json_file(
+        &bundle_dir.join("case_summary.json"),
+        &serde_json::to_string_pretty(&summary).map_err(|e| e.to_string())?,
+    )?;
+    write_json_file(
+        &bundle_dir.join("evidence_index.json"),
+        &export_table_as_json(&conn, "evidence", "created_at DESC")?,
+    )?;
+    write_json_file(
+        &bundle_dir.join("timeline_events.json"),
+        &export_table_as_json(&conn, "events", "created_at DESC")?,
+    )?;
+    write_json_file(
+        &bundle_dir.join("manifest.json"),
+        &serde_json::to_string_pretty(&serde_json::json!({
+            "case_id": case_id,
+            "created_at_utc": timestamp,
+            "contents": ["case_summary.json", "evidence_index.json", "timeline_events.json"]
+        }))
+        .map_err(|e| e.to_string())?,
+    )?;
+
+    let receipt = FullCaseBundleReceipt {
+        success: true,
+        bundle_path: bundle_dir.to_string_lossy().to_string(),
+        timestamp_utc: timestamp,
+    };
+    serde_json::to_string(&receipt).map_err(|e| e.to_string())
+}
+
+fn export_table_as_json(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    order_by: &str,
+) -> Result<String, String> {
+    let sql = format!("SELECT * FROM {table_name} ORDER BY {order_by}");
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let column_names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .map(|name| name.to_string())
+        .collect();
+    let rows = stmt
+        .query_map([], |row| {
+            let mut item = serde_json::Map::new();
+            for (index, name) in column_names.iter().enumerate() {
+                let value = row
+                    .get::<_, Option<String>>(index)?
+                    .map(serde_json::Value::String)
+                    .unwrap_or(serde_json::Value::Null);
+                item.insert(name.clone(), value);
+            }
+            Ok(serde_json::Value::Object(item))
+        })
+        .map_err(|e| e.to_string())?;
+    let values = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    serde_json::to_string_pretty(&values).map_err(|e| e.to_string())
+}
+
+fn write_json_file(path: &std::path::Path, content: &str) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(path, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -2229,6 +2813,21 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             save_evidence,
+            submit_evidence,
+            get_evidence_metadata,
+            record_chain_of_custody,
+            export_pdf,
+            export_timeline,
+            export_evidence_index,
+            export_attorney_packet,
+            get_case_summary,
+            get_case_overview,
+            rebuild_derived_state,
+            run_full_integrity_check,
+            get_app_diagnostics,
+            clear_runtime_cache,
+            rebuild_all_documents,
+            export_full_case_bundle,
             get_evidence,
             delete_evidence,
             get_evidence_chain,

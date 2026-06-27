@@ -17,6 +17,73 @@ export interface Evidence {
   createdAt: string;
 }
 
+export interface EvidenceRecord {
+  evidence_id: string;
+  document_id: string;
+  file_path: string;
+  file_hash: string;
+  exif_json: string;
+  gps_lat?: number;
+  gps_lon?: number;
+  device_identity: string;
+  timestamp_utc: string;
+}
+
+export interface ChainOfCustodyEntry {
+  id: string;
+  evidence_id: string;
+  action: string;
+  hash: string;
+  created_at: string;
+  metadata_json: string;
+}
+
+export interface ExportReceipt {
+  success: boolean;
+  file_path: string;
+  timestamp_utc: string;
+}
+
+export interface SmartDocumentEvent {
+  eventId: string;
+  documentId: string;
+  timestampUtc: string;
+  actionType: string;
+  effectiveStatus: string;
+  payload: Record<string, unknown>;
+}
+
+export interface CaseSummary {
+  case_id: string;
+  timeline_count: number;
+  evidence_count: number;
+  violation_count: number;
+  last_updated: string;
+}
+
+export interface IntegrityCheck {
+  success: boolean;
+  total_events: number;
+  broken_links: number;
+  missing_hashes: number;
+  orphan_documents: number;
+}
+
+export interface DiagnosticsReport {
+  db_path: string;
+  total_documents: number;
+  total_events: number;
+  total_evidence: number;
+  last_export?: string;
+  app_version: string;
+}
+
+export interface FullCaseBundleReceipt {
+  success: boolean;
+  bundle_path: string;
+  timestamp_utc: string;
+}
+
 export interface CourtOrder {
   id: string;
   title: string;

@@ -1,0 +1,8 @@
+{
+  "db_path": "%APPDATA%/com.proofofpresence.app/proof_of_presence.db",
+  "total_documents": 0,
+  "total_events": 0,
+  "total_evidence": 0,
+  "last_export": null,
+  "app_version": "1.0.0"
+}

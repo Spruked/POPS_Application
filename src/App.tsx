@@ -10,6 +10,7 @@ import VisitationCalendar from "./pages/VisitationCalendar";
 import Events from "./pages/Events";
 import Reports from "./pages/Reports";
 import Profile from "./pages/Profile";
+import Settings from "./pages/Settings";
 import PlayersDossier from "./pages/PlayersDossier";
 import Incidents from "./pages/Incidents";
 import AboutMission from "./pages/AboutMission";
@@ -41,7 +42,7 @@ function App() {
     legal: <CourtOrders />,
     events: <Events />,
     reports: <Reports />,
-    settings: <CommandPlaceholder page="settings" title="Settings" section="Settings" />,
+    settings: <Settings />,
     contacts: <CommandPlaceholder page="contacts" title="Contacts" section="Contacts" />,
     profile: <Profile />,
     players: <PlayersDossier />,

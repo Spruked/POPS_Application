@@ -1,0 +1,7 @@
+{
+  "case_id": "case-001",
+  "include_evidence": true,
+  "include_timeline": true,
+  "include_profile": true,
+  "format": "directory_bundle"
+}

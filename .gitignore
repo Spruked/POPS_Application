@@ -1,5 +1,6 @@
 # Logs
-logs
+
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -7,40 +8,71 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Node / frontend build output
+
+node_modules/
+dist/
+dist-ssr/
 *.local
 
-# Editor directories and files
+# Editor directories and local workspace files
+
 .vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+Thumbs.db
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
+*.tmp
 
-# Tauri
-/src-tauri/target
-/src-tauri/gen
+# Tauri / Rust build output
 
-# SQLite databases
+/src-tauri/target/
+/src-tauri/gen/
+
+# SQLite runtime databases and journals
+
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
 
-# Python caches
-__pycache__/
+# Python environments and caches
+
+**pycache**/
 *.py[cod]
 .venv/
 venv/
+env/
 
-# Website moved to separate repository; ignore accidental local copies here
+# Website belongs to its separate repository
+
 POPS_Website/
 
-# Local structure snapshots
+# Local structure snapshots and temporary workspace inventories
+
 structure.txt
+tree.txt
+
+# Personal Session Monitor runtime marker
+
+.usage-monitor.pid
+
+# Local environment files and secrets
+
+.env
+.env.*
+!.env.example
+
+# Local OS / file explorer metadata
+
+desktop.ini
+$RECYCLE.BIN/

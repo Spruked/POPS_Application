@@ -1,0 +1,10 @@
+{
+  "evidence_id": "ev-001",
+  "document_id": "doc-123",
+  "file_path": "/evidence/ev-001.jpg",
+  "file_hash": "sha256-...",
+  "exif_json": "{}",
+  "gps_lat": 39.0119,
+  "gps_lon": -94.4820,
+  "device_identity": "tauri-desktop-01"
+}
