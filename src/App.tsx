@@ -1,7 +1,8 @@
 import { useState } from "react";
+import "./styles/pops-assistant.css";
 import Sidebar, { APP_NAV_LABELS } from "./components/Sidebar";
 import ToastContainer from "./components/ToastContainer";
-import OrbAssistant from "./components/OrbAssistant";
+import PopsAssistant from "./components/PopsAssistant";
 import Dashboard from "./pages/Dashboard";
 import EvidenceVault from "./pages/EvidenceVault";
 import CourtOrders from "./pages/CourtOrders";
@@ -64,11 +65,11 @@ function App() {
     <div className="app-container">
       <div className="field-bg" />
       <Sidebar currentPage={page} onNavigate={setPage} />
-      <main className="main-content">
+      <main className="main-content pops-main-content">
         {pages[page] || <CommandPlaceholder page={page} title={fallback.title} section={fallback.section} />}
       </main>
       <ToastContainer toasts={toasts} />
-      <OrbAssistant />
+      <PopsAssistant activePage={page} onNavigate={setPage} />
     </div>
   );
 }
