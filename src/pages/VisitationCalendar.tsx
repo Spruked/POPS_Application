@@ -132,7 +132,7 @@ export default function VisitationCalendar() {
     const next = [created, ...entries];
     setEntries(next);
     saveEntries(next);
-    show('Visitation entry saved.');
+    show('Calendar entry saved.');
 
     const annotation = analyzeNarrative(created.notes || '');
     if (annotation.findings.some((f) => f.label === 'Risk word' || f.label === 'Attorney review')) {
@@ -147,14 +147,14 @@ export default function VisitationCalendar() {
     const next = entries.filter((entry) => entry.id !== id);
     setEntries(next);
     saveEntries(next);
-    show('Visitation entry removed.');
+    show('Calendar entry removed.');
   }
 
   return (
     <div>
       <div className="page-header">
-        <h2>Visitation Calendar</h2>
-        <p>Track scheduled parenting time, denied exchanges, outcomes, and court-safe documentation.</p>
+        <h2>Case Calendar</h2>
+        <p>Keep Time. Keep Proof.</p>
       </div>
 
       <div className="card">
@@ -167,7 +167,7 @@ export default function VisitationCalendar() {
             <ChevronRight size={16} />
           </button>
           <button className="btn btn-primary btn-sm viscal-add" onClick={() => openCreateFor(selectedDate)}>
-            <Plus size={16} /> Add Visit
+            <Plus size={16} /> Add Entry
           </button>
         </div>
 
@@ -215,7 +215,7 @@ export default function VisitationCalendar() {
         {selectedEntries.length === 0 ? (
           <div className="empty-state">
             <Calendar size={44} />
-            <p>No visitation entries for this date yet.</p>
+            <p>No parenting-time or exchange entries for this date yet.</p>
           </div>
         ) : (
           <div className="timeline">
@@ -251,7 +251,7 @@ export default function VisitationCalendar() {
       <Modal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
-        title="Add Visitation Entry"
+        title="Add Parenting Time / Exchange Entry"
         footer={
           <>
             <button className="btn btn-ghost" onClick={() => setIsModalOpen(false)}>Cancel</button>

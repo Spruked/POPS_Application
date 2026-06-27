@@ -28,7 +28,7 @@ const sections: NavSection[] = [
     { page: 'evidence', label: 'Evidence Vault', badge: 'SHA' }, { page: 'evidenceHashCheck', label: 'Hash Check' }, { page: 'evidenceChainOfCustody', label: 'Chain of Custody' }, { page: 'evidenceUploads', label: 'Uploads' }, { page: 'evidenceExhibits', label: 'Exhibits' }, { page: 'evidenceMetadata', label: 'Metadata' }, { page: 'evidenceRiskReview', label: 'Risk Review' },
   ] },
   { title: 'Members', icon: Monitor, page: 'member', items: [
-    { page: 'member', label: 'Member Command' }, { page: 'access', label: 'Access' }, { page: 'membersBrotherhood', label: 'Brotherhood' }, { page: 'membersLicense', label: 'License' }, { page: 'membersOpenDoor', label: 'Open Door' }, { page: 'membersSponsor', label: 'Sponsor a Father' }, { page: 'membersAccount', label: 'Account' },
+    { page: 'member', label: 'Member Command' }, { page: 'access', label: 'Access' }, { page: 'membersBrotherhood', label: 'Community Bridge', badge: 'Soon' }, { page: 'membersLicense', label: 'License' }, { page: 'membersOpenDoor', label: 'Open Door' }, { page: 'membersSponsor', label: 'Sponsor a Father' }, { page: 'membersAccount', label: 'Account' },
   ] },
   { title: 'About', icon: BookOpen, page: 'about', items: [
     { page: 'about', label: 'About P.O.P.S.' }, { page: 'mission', label: 'Mission' }, { page: 'doctrine', label: 'Doctrine' }, { page: 'howItWorks', label: 'How P.O.P.S. Works' }, { page: 'declaration', label: 'Declaration' }, { page: 'pledge', label: 'Creed + Pledge' }, { page: 'lexicon', label: 'Lexicon + Highlights' },

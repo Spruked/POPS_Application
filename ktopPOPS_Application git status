@@ -1,0 +1,23 @@
+warning: in the working copy of 'src-tauri/src/main.rs', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/ContactResearchPanel.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/PopsAssistant.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/Sidebar.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/components/SidebarRefined.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/hooks/useStore.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/pages/ContactsDossier.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/pages/EvidenceVault.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/pages/Profile.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/pages/VisitationCalendar.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/types.ts', LF will be replaced by CRLF the next time Git touches it
+ src-tauri/src/main.rs                   | 266 [32m+++++++++++++++++++++++++++++++[m[31m-[m
+ src/components/ContactResearchPanel.tsx | 107 [32m+++++++++[m[31m----[m
+ src/components/PopsAssistant.tsx        |  41 [32m++++[m[31m-[m
+ src/components/Sidebar.tsx              |   1 [31m-[m
+ src/components/SidebarRefined.tsx       |   2 [32m+[m[31m-[m
+ src/hooks/useStore.ts                   |  39 [32m++++[m[31m-[m
+ src/pages/ContactsDossier.tsx           |  30 [32m+++[m[31m-[m
+ src/pages/EvidenceVault.tsx             |   6 [32m+[m[31m-[m
+ src/pages/Profile.tsx                   |   4 [32m+[m[31m-[m
+ src/pages/VisitationCalendar.tsx        |  14 [32m+[m[31m-[m
+ src/types.ts                            |  37 [32m+++++[m
+ 11 files changed, 495 insertions(+), 52 deletions(-)

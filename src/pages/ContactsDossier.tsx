@@ -5,7 +5,35 @@ import { generateId } from "../utils/helpers";
 import type { PlayerDossierRecord, PlayerInteractionLog } from "../types";
 import ContactResearchPanel from "../components/ContactResearchPanel";
 
-const ROLES = ["Other parent", "Attorney", "Court clerk", "Judge", "School contact", "Medical contact", "Support agency", "Law enforcement", "Witness", "Advocate", "Family member", "Other involved person"];
+const ROLES = [
+  "Other parent",
+  "Child",
+  "Guardian",
+  "Family member",
+  "Current attorney",
+  "Former attorney",
+  "Consulted attorney",
+  "Opposing attorney",
+  "Judge",
+  "Court clerk",
+  "Prosecutor",
+  "Guardian ad litem",
+  "Mediator",
+  "Parent coordinator",
+  "Case worker",
+  "School staff",
+  "Medical provider",
+  "Therapy provider",
+  "Counseling provider",
+  "Police officer",
+  "Law-enforcement contact",
+  "Child support contact",
+  "Agency contact",
+  "Witness",
+  "Advocate",
+  "Consultant",
+  "Other involved person",
+];
 
 function newContact(): PlayerDossierRecord {
   const now = new Date().toISOString();

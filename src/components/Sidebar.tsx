@@ -67,7 +67,6 @@ const navSections: NavSection[] = [
       { page: 'calendarCourtDates', label: 'Court Dates & Filing Deadlines' },
       { page: 'calendarAppointments', label: 'Appointments, Medical & School' },
       { page: 'calendarAttorneyMeetings', label: 'Attorney & Case Meetings' },
-      { page: 'calendarSupportDeadlines', label: 'Support & Financial Deadlines' },
       { page: 'calendarRequiredContacts', label: 'Contact Commitments' },
       { page: 'calendarReminders', label: 'Reminders & Follow-Ups' },
     ],

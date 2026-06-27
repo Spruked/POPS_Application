@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[path = "mcp/research_server.rs"]
+mod research_server;
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use tauri::api::path::app_data_dir;
 use tauri::{Manager, State};
 use rusqlite::OptionalExtension;
+use research_server::mcp_research_tool;
 
 // ─── SQLite Database ──────────────────────────────────────────────
 
@@ -200,6 +204,28 @@ fn init_db(path: &str) -> rusqlite::Connection {
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS contact_research_findings (
+            id TEXT PRIMARY KEY,
+            contact_id TEXT NOT NULL,
+            research_question TEXT NOT NULL,
+            provider_or_source TEXT NOT NULL,
+            source_reference TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            captured_finding TEXT NOT NULL,
+            user_note TEXT NOT NULL,
+            status TEXT NOT NULL,
+            linked_person_id TEXT,
+            linked_evidence_id TEXT,
+            linked_event_id TEXT,
+            linked_court_order_id TEXT,
+            linked_calendar_item_id TEXT,
+            linked_timeline_item_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            audit_ledger_id TEXT,
+            receipt_hash TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_contact_research_contact ON contact_research_findings(contact_id, updated_at);
         CREATE TABLE IF NOT EXISTS sealed_records (
             id TEXT PRIMARY KEY,
             original_input TEXT NOT NULL,
@@ -280,6 +306,34 @@ fn init_db(path: &str) -> rusqlite::Connection {
     );
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_evidence_metadata_document_id ON evidence_metadata(document_id)",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE TABLE IF NOT EXISTS contact_research_findings (
+            id TEXT PRIMARY KEY,
+            contact_id TEXT NOT NULL,
+            research_question TEXT NOT NULL,
+            provider_or_source TEXT NOT NULL,
+            source_reference TEXT NOT NULL,
+            source_title TEXT NOT NULL,
+            captured_finding TEXT NOT NULL,
+            user_note TEXT NOT NULL,
+            status TEXT NOT NULL,
+            linked_person_id TEXT,
+            linked_evidence_id TEXT,
+            linked_event_id TEXT,
+            linked_court_order_id TEXT,
+            linked_calendar_item_id TEXT,
+            linked_timeline_item_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            audit_ledger_id TEXT,
+            receipt_hash TEXT
+        )",
+        [],
+    );
+    let _ = conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contact_research_contact ON contact_research_findings(contact_id, updated_at)",
         [],
     );
     conn
@@ -659,6 +713,60 @@ struct PlayerDossierItem {
     created_at: String,
     #[serde(rename = "updatedAt")]
     updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ContactResearchFinding {
+    id: String,
+    #[serde(rename = "contactId")]
+    contact_id: String,
+    #[serde(rename = "researchQuestion")]
+    research_question: String,
+    #[serde(rename = "providerOrSource")]
+    provider_or_source: String,
+    #[serde(rename = "sourceReference")]
+    source_reference: String,
+    #[serde(rename = "sourceTitle")]
+    source_title: String,
+    #[serde(rename = "capturedFinding")]
+    captured_finding: String,
+    #[serde(rename = "userNote")]
+    user_note: String,
+    status: String,
+    #[serde(rename = "linkedPersonId")]
+    linked_person_id: String,
+    #[serde(rename = "linkedEvidenceId")]
+    linked_evidence_id: String,
+    #[serde(rename = "linkedEventId")]
+    linked_event_id: String,
+    #[serde(rename = "linkedCourtOrderId")]
+    linked_court_order_id: String,
+    #[serde(rename = "linkedCalendarItemId")]
+    linked_calendar_item_id: String,
+    #[serde(rename = "linkedTimelineItemId")]
+    linked_timeline_item_id: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    #[serde(rename = "auditLedgerId")]
+    audit_ledger_id: Option<String>,
+    #[serde(rename = "receiptHash")]
+    receipt_hash: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ContactResearchReceipt {
+    success: bool,
+    #[serde(rename = "findingId")]
+    finding_id: String,
+    #[serde(rename = "auditLedgerId")]
+    audit_ledger_id: String,
+    #[serde(rename = "receiptHash")]
+    receipt_hash: String,
+    #[serde(rename = "timestampUtc")]
+    timestamp_utc: String,
+    message: String,
 }
 
 #[derive(Serialize)]
@@ -2160,6 +2268,159 @@ fn delete_player_dossier(db: State<DbConn>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn save_contact_research_finding(
+    db: State<DbConn>,
+    mut finding: ContactResearchFinding,
+) -> Result<ContactResearchReceipt, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
+    if finding.created_at.trim().is_empty() {
+        finding.created_at = timestamp_utc.clone();
+    }
+    finding.updated_at = timestamp_utc.clone();
+
+    let payload_json = serde_json::to_string(&finding).map_err(|e| e.to_string())?;
+    let receipt_hash = sha256_hex(payload_json.as_bytes());
+    let audit_ledger_id = uuid::Uuid::new_v4().to_string();
+    let previous_ledger_hash = get_previous_ledger_hash(&conn)?;
+    let metadata_json = serde_json::json!({
+        "record_id": &finding.id,
+        "contact_id": &finding.contact_id,
+        "action": "CONTACT_RESEARCH_FINDING_SAVED",
+        "status": &finding.status,
+        "provider_or_source": &finding.provider_or_source,
+    })
+    .to_string();
+    let ledger_hash = ledger_entry_hash(
+        &finding.id,
+        "CONTACT_RESEARCH_FINDING_SAVED",
+        &receipt_hash,
+        &timestamp_utc,
+        &metadata_json,
+        previous_ledger_hash.as_deref(),
+    );
+
+    finding.audit_ledger_id = Some(audit_ledger_id.clone());
+    finding.receipt_hash = Some(receipt_hash.clone());
+
+    conn.execute(
+        "INSERT OR REPLACE INTO contact_research_findings (
+            id, contact_id, research_question, provider_or_source, source_reference,
+            source_title, captured_finding, user_note, status, linked_person_id,
+            linked_evidence_id, linked_event_id, linked_court_order_id,
+            linked_calendar_item_id, linked_timeline_item_id, created_at, updated_at,
+            audit_ledger_id, receipt_hash
+        ) VALUES (
+            ?1, ?2, ?3, ?4, ?5,
+            ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13,
+            ?14, ?15, ?16, ?17,
+            ?18, ?19
+        )",
+        rusqlite::params![
+            &finding.id,
+            &finding.contact_id,
+            &finding.research_question,
+            &finding.provider_or_source,
+            &finding.source_reference,
+            &finding.source_title,
+            &finding.captured_finding,
+            &finding.user_note,
+            &finding.status,
+            &finding.linked_person_id,
+            &finding.linked_evidence_id,
+            &finding.linked_event_id,
+            &finding.linked_court_order_id,
+            &finding.linked_calendar_item_id,
+            &finding.linked_timeline_item_id,
+            &finding.created_at,
+            &finding.updated_at,
+            &audit_ledger_id,
+            &receipt_hash,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO audit_ledger (
+            id, record_id, action, payload_hash, hash, created_at, metadata_json,
+            previous_ledger_hash, ledger_entry_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            &audit_ledger_id,
+            &finding.id,
+            "CONTACT_RESEARCH_FINDING_SAVED",
+            &receipt_hash,
+            &receipt_hash,
+            &timestamp_utc,
+            &metadata_json,
+            &previous_ledger_hash,
+            &ledger_hash,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(ContactResearchReceipt {
+        success: true,
+        finding_id: finding.id,
+        audit_ledger_id,
+        receipt_hash,
+        timestamp_utc,
+        message: "Research finding saved.".to_string(),
+    })
+}
+
+#[tauri::command]
+fn get_contact_research_findings(
+    db: State<DbConn>,
+    contact_id: String,
+) -> Result<Vec<ContactResearchFinding>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+                id, contact_id, research_question, provider_or_source, source_reference,
+                source_title, captured_finding, user_note, status, linked_person_id,
+                linked_evidence_id, linked_event_id, linked_court_order_id,
+                linked_calendar_item_id, linked_timeline_item_id, created_at, updated_at,
+                audit_ledger_id, receipt_hash
+             FROM contact_research_findings
+             WHERE contact_id = ?1
+             ORDER BY updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+
+    let rows = stmt
+        .query_map([contact_id], |row| {
+            Ok(ContactResearchFinding {
+                id: row.get(0)?,
+                contact_id: row.get(1)?,
+                research_question: row.get(2)?,
+                provider_or_source: row.get(3)?,
+                source_reference: row.get(4)?,
+                source_title: row.get(5)?,
+                captured_finding: row.get(6)?,
+                user_note: row.get(7)?,
+                status: row.get(8)?,
+                linked_person_id: row.get(9)?,
+                linked_evidence_id: row.get(10)?,
+                linked_event_id: row.get(11)?,
+                linked_court_order_id: row.get(12)?,
+                linked_calendar_item_id: row.get(13)?,
+                linked_timeline_item_id: row.get(14)?,
+                created_at: row.get(15)?,
+                updated_at: row.get(16)?,
+                audit_ledger_id: row.get(17)?,
+                receipt_hash: row.get(18)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn save_profile(db: State<DbConn>, profile: CaseProfile) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
@@ -2846,6 +3107,8 @@ fn main() {
             save_player_dossier,
             get_players_dossier,
             delete_player_dossier,
+            save_contact_research_finding,
+            get_contact_research_findings,
             save_profile,
             get_profile,
             save_report,
@@ -2860,7 +3123,8 @@ fn main() {
             verify_evidence_integrity,
             compute_file_hash,
             export_database,
-            get_db_path
+            get_db_path,
+            mcp_research_tool
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

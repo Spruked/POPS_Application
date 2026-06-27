@@ -15,6 +15,7 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
+import { morbManager, type MorbStatus } from "../morbs/morb_manager";
 import type { Page } from "../types";
 
 export type AssistantMode = "core" | "local" | "api";
@@ -69,7 +70,7 @@ function makeCoreResponse(input: string, activePage: Page) {
     return "I can help you organize the item before it becomes part of your record. Open Evidence Vault to preserve the original, describe the source, and link it to the right event.";
   }
   if (request.includes("visit") || request.includes("exchange") || request.includes("parenting time")) {
-    return "Let’s document the exchange as facts: what was scheduled, where it was supposed to happen, what occurred, what you did, and any supporting material. I can guide you through the Parenting Time & Exchanges record.";
+    return "Let's document the exchange as facts: what was scheduled, where it was supposed to happen, what occurred, what you did, and any supporting material. I can guide you through the Parenting Time & Exchanges record.";
   }
   if (request.includes("order") || request.includes("court")) {
     return "I can help you locate order information and keep it separate from your interpretation. We can connect a factual event to the correct order reference after you review it.";
@@ -80,15 +81,27 @@ function makeCoreResponse(input: string, activePage: Page) {
   return `You are on ${currentPage}. In Core Guided Mode, I can help you navigate, structure a factual record, prepare a draft, or point you to the right POPS workspace.`;
 }
 
+function isResearchRequest(input: string) {
+  const request = input.toLowerCase();
+  return request.includes("research") || request.includes("look up") || request.includes("source") || request.includes("find information");
+}
+
+function researchStatusCopy(status: MorbStatus) {
+  if (status === "working") return "Research in progress";
+  if (status === "complete") return "Research result ready for review";
+  return "Research ready";
+}
+
 export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantProps) {
   const [messages, setMessages] = useState<AssistantMessage[]>([
-    { id: "welcome", role: "assistant", text: "I’m here to help you organize your records, prepare a draft, find a section, or work through the page you are on." },
+    { id: "welcome", role: "assistant", text: "I'm here to help you organize your records, prepare a draft, find a section, or work through the page you are on." },
   ]);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<AssistantMode>("core");
   const [dockState, setDockState] = useState<DockState>("open");
   const [engineOpen, setEngineOpen] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
+  const [morbStatus, setMorbStatus] = useState<MorbStatus>("idle");
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -99,11 +112,28 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
     setMessages((current) => [...current, { id: `${Date.now()}-assistant`, role: "assistant", text }]);
   }
 
-  function handleSend() {
+  async function handleSend() {
     const trimmed = input.trim();
     if (!trimmed) return;
     setMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text: trimmed }]);
     setInput("");
+
+    if (isResearchRequest(trimmed)) {
+      setMorbStatus("working");
+      try {
+        const result = await morbManager.runResearch({
+          topic: trimmed,
+          personContext: PAGE_LABELS[activePage] || activePage,
+        });
+        setMorbStatus(morbManager.getStatus());
+        addAssistantMessage(`Research result ready for review: ${result.finding} Receipt ${result.receipt.id}.`);
+      } catch (error) {
+        setMorbStatus("idle");
+        addAssistantMessage(error instanceof Error ? error.message : "Research worker failed.");
+      }
+      return;
+    }
+
     addAssistantMessage(makeCoreResponse(trimmed, activePage));
   }
 
@@ -150,6 +180,11 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         <section className="pops-private-status">
           <ShieldCheck size={16} aria-hidden="true" />
           <div><strong>Private workspace</strong><span>Guidance stays inside POPS unless you choose an external assistant engine.</span></div>
+        </section>
+
+        <section className="pops-private-status" aria-label="Research status">
+          <Sparkles size={16} aria-hidden="true" />
+          <div><strong>{researchStatusCopy(morbStatus)}</strong><span>User-directed research only</span></div>
         </section>
 
         <section className="pops-conversation" aria-live="polite" ref={messageListRef}>

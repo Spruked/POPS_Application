@@ -116,7 +116,7 @@ export default function Profile() {
               }
             >
               <option>Family Law - Custody</option>
-              <option>Family Law - Visitation</option>
+              <option>Family Law - Parenting Time</option>
               <option>Family Law - Support</option>
               <option>Family Law - Modification</option>
               <option>Other</option>

@@ -362,7 +362,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
             <input
               value={captureForm.categorySuggestion}
               onChange={e => setCaptureForm({ ...captureForm, categorySuggestion: e.target.value })}
-              placeholder="e.g., visitation, communication, support"
+              placeholder="e.g., parenting-time, communication, support"
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end' }}>
@@ -704,7 +704,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
           </div>
           <div className="form-group">
             <label>Title</label>
-            <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g., Visitation Denial Photo" />
+            <input value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} placeholder="e.g., Parenting-time denial photo" />
           </div>
           <div className="form-group">
             <label>Date of Evidence</label>
@@ -712,7 +712,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
           </div>
           <div className="form-group">
             <label>Tags (comma separated)</label>
-            <input value={form.tags} onChange={e => setForm({ ...form, tags: e.target.value })} placeholder="e.g., visitation, denial, text-message" />
+            <input value={form.tags} onChange={e => setForm({ ...form, tags: e.target.value })} placeholder="e.g., parenting-time, denial, text-message" />
           </div>
           <div className="form-group">
             <label>TrustGlyph Risk</label>

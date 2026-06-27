@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
-import type { Evidence, CourtOrder, Violation, Event, CaseProfile, Report, PlayerDossierRecord } from '../types';
+import type { Evidence, CourtOrder, Violation, Event, CaseProfile, Report, PlayerDossierRecord, ContactResearchFinding, ContactResearchReceipt } from '../types';
 
 // ─── Evidence ─────────────────────────────────────────────────────
 
@@ -257,4 +257,41 @@ export function usePlayersStore() {
   const get = useCallback((id: string) => items.find(i => i.id === id), [items]);
 
   return { items, add, remove, update, get, refresh, loaded };
+}
+
+// Contact Research Findings
+
+export function useContactResearchStore(contactId: string) {
+  const [items, setItems] = useState<ContactResearchFinding[]>([]);
+  const [loaded, setLoaded] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!contactId) {
+      setItems([]);
+      setLoaded(true);
+      return;
+    }
+    const data = await invoke<ContactResearchFinding[]>('get_contact_research_findings', { contactId });
+    setItems(data);
+    setLoaded(true);
+  }, [contactId]);
+
+  useEffect(() => {
+    refresh().catch(() => setLoaded(true));
+  }, [refresh]);
+
+  const add = useCallback(async (finding: ContactResearchFinding) => {
+    const receipt = await invoke<ContactResearchReceipt>('save_contact_research_finding', { finding });
+    const saved: ContactResearchFinding = {
+      ...finding,
+      auditLedgerId: receipt.auditLedgerId,
+      receiptHash: receipt.receiptHash,
+      updatedAt: receipt.timestampUtc,
+      createdAt: finding.createdAt || receipt.timestampUtc,
+    };
+    setItems(prev => [saved, ...prev.filter(item => item.id !== saved.id)]);
+    return receipt;
+  }, []);
+
+  return { items, add, refresh, loaded };
 }

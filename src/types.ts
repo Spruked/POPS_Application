@@ -196,6 +196,43 @@ export interface PlayerDossierRecord {
   updatedAt: string;
 }
 
+export type ContactResearchStatus =
+  | 'Source-backed'
+  | 'User-provided'
+  | 'Heard elsewhere'
+  | 'Needs verification';
+
+export interface ContactResearchFinding {
+  id: string;
+  contactId: string;
+  researchQuestion: string;
+  providerOrSource: string;
+  sourceReference: string;
+  sourceTitle: string;
+  capturedFinding: string;
+  userNote: string;
+  status: ContactResearchStatus;
+  linkedPersonId: string;
+  linkedEvidenceId: string;
+  linkedEventId: string;
+  linkedCourtOrderId: string;
+  linkedCalendarItemId: string;
+  linkedTimelineItemId: string;
+  createdAt: string;
+  updatedAt: string;
+  auditLedgerId?: string;
+  receiptHash?: string;
+}
+
+export interface ContactResearchReceipt {
+  success: boolean;
+  findingId: string;
+  auditLedgerId: string;
+  receiptHash: string;
+  timestampUtc: string;
+  message: string;
+}
+
 export type Page =
   | 'dashboard'
   | 'contacts'
