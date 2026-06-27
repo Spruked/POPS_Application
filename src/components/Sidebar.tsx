@@ -37,11 +37,11 @@ interface NavSection {
 const navSections: NavSection[] = [
   { title: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
   {
-    title: 'Contacts',
+    title: 'People & Dossiers',
     icon: Users,
     page: 'contacts',
     items: [
-      { page: 'contactsAll', label: 'All Contacts' },
+      { page: 'contactsAll', label: 'All People' },
       { page: 'contactsAttorneys', label: 'Attorneys' },
       { page: 'contactsCourtClerk', label: 'Court / Clerk' },
       { page: 'contactsJudges', label: 'Judges' },
@@ -54,25 +54,22 @@ const navSections: NavSection[] = [
       { page: 'contactsLawEnforcement', label: 'Law Enforcement' },
       { page: 'contactsAdvocates', label: 'Advocates' },
       { page: 'contactsRequired', label: 'Required Contacts', badge: 'Due' },
-      { page: 'contactsHistory', label: 'Contact History' },
+      { page: 'contactsHistory', label: 'Dossier History' },
     ],
   },
   {
-    title: 'Calendar',
+    title: 'Case Calendar',
     icon: CalendarDays,
     page: 'calendar',
     items: [
-      { page: 'calendar', label: 'Calendar Overview' },
-      { page: 'visitation', label: 'Visitation' },
-      { page: 'calendarCourtDates', label: 'Court Dates' },
-      { page: 'calendarAppointments', label: 'Appointments' },
-      { page: 'calendarMedical', label: 'Medical' },
-      { page: 'calendarSchool', label: 'School' },
-      { page: 'calendarAttorneyMeetings', label: 'Attorney Meetings' },
-      { page: 'calendarSupportDeadlines', label: 'Support Deadlines' },
-      { page: 'calendarRequiredContacts', label: 'Required Contacts' },
-      { page: 'calendarReminders', label: 'Reminders' },
-      { page: 'calendarFollowUps', label: 'Follow-Ups' },
+      { page: 'calendar', label: 'Case Calendar' },
+      { page: 'visitation', label: 'Parenting Time & Exchanges' },
+      { page: 'calendarCourtDates', label: 'Court Dates & Filing Deadlines' },
+      { page: 'calendarAppointments', label: 'Appointments, Medical & School' },
+      { page: 'calendarAttorneyMeetings', label: 'Attorney & Case Meetings' },
+      { page: 'calendarSupportDeadlines', label: 'Support & Financial Deadlines' },
+      { page: 'calendarRequiredContacts', label: 'Contact Commitments' },
+      { page: 'calendarReminders', label: 'Reminders & Follow-Ups' },
     ],
   },
   {
@@ -123,7 +120,7 @@ const navSections: NavSection[] = [
     items: [
       { page: 'member', label: 'Member Command' },
       { page: 'access', label: 'Access' },
-      { page: 'membersBrotherhood', label: 'Brotherhood' },
+      { page: 'membersBrotherhood', label: 'Community Bridge', badge: 'Soon' },
       { page: 'membersLicense', label: 'License' },
       { page: 'membersOpenDoor', label: 'Open Door' },
       { page: 'membersSponsor', label: 'Sponsor a Father' },
@@ -165,7 +162,7 @@ const navSections: NavSection[] = [
     page: 'settings',
     items: [
       { page: 'settings', label: 'Settings' },
-      { page: 'settingsOrbAssistant', label: 'ORB Assistant' },
+      { page: 'settingsOrbAssistant', label: 'Assistant Settings' },
       { page: 'settingsDataBackup', label: 'Data Backup' },
       { page: 'settingsSecurity', label: 'Security' },
       { page: 'settingsLocalStorage', label: 'Local Storage' },
@@ -243,25 +240,16 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
 
           return (
             <div className="nav-section" key={section.title}>
-              <button
-                className={`nav-item nav-section-button ${active ? 'active' : ''}`}
-                onClick={() => toggleSection(section)}
-              >
+              <button className={`nav-item nav-section-button ${active ? 'active' : ''}`} onClick={() => toggleSection(section)}>
                 <Icon size={18} />
                 <span>{section.title}</span>
-                {section.items?.length ? (
-                  <ChevronDown className={`nav-chevron ${open ? 'open' : ''}`} size={15} />
-                ) : null}
+                {section.items?.length ? <ChevronDown className={`nav-chevron ${open ? 'open' : ''}`} size={15} /> : null}
               </button>
 
               {section.items?.length && open && (
                 <div className="nav-subitems">
                   {section.items.map((item) => (
-                    <button
-                      key={item.page}
-                      className={`nav-item nav-subitem ${currentPage === item.page ? 'active' : ''}`}
-                      onClick={() => onNavigate(item.page)}
-                    >
+                    <button key={item.page} className={`nav-item nav-subitem ${currentPage === item.page ? 'active' : ''}`} onClick={() => onNavigate(item.page)}>
                       <span>{item.label}</span>
                       {item.badge && <span className="nav-badge">{item.badge}</span>}
                     </button>
@@ -277,17 +265,13 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         <div className="orb-mini">
           <div className="orb-mini-dot" />
           <div>
-            <div className="orb-mini-text">ORB Assistant</div>
-            <div className="orb-mini-subtext">Context ready</div>
+            <div className="orb-mini-text">Pops!</div>
+            <div className="orb-mini-subtext">Private guide</div>
           </div>
         </div>
         <div className="annotation-chip-wrap">
-          <span className="annotation-chip annotation-chip-soft">
-            <Database size={12} /> Local Data
-          </span>
-          <span className="annotation-chip">
-            <AlertTriangle size={12} /> Review Gates
-          </span>
+          <span className="annotation-chip annotation-chip-soft"><Database size={12} /> Local Data</span>
+          <span className="annotation-chip"><AlertTriangle size={12} /> Review Gates</span>
         </div>
       </div>
     </aside>
