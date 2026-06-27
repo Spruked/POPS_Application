@@ -80,6 +80,7 @@
   box-shadow: 0 13px 36px rgba(0, 0, 0, 0.48), 0 0 28px rgba(83, 149, 255, 0.42);
 }
 
+body:has(.pops-assistant-launcher) .pops-main-content,
 .pops-assistant-collapsed .pops-main-content {
   padding-right: 32px;
 }
