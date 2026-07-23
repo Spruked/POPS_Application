@@ -15,6 +15,7 @@ import numpy as np
 from typing import Dict, List, Optional, Any
 import sys
 from pathlib import Path
+import tempfile
 
 # Add Qwen to path
 QWEN_PATH = Path(__file__).resolve().parents[3] / "qwen_engine"
@@ -66,10 +67,12 @@ class QwenAdapter:
     def _fallback_synthesize(self, text: str, voice_id: str) -> str:
         """Fallback synthesis stub."""
         import time
-        stub_path = f"/tmp/qwen_stub_{int(time.time())}.txt"
+        output_dir = Path(tempfile.gettempdir()) / "tpc_website_orb"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stub_path = output_dir / f"qwen_stub_{int(time.time())}.txt"
         with open(stub_path, 'w') as f:
             f.write(f"[QWEN STUB] Voice: {voice_id}\nText: {text[:100]}...")
-        return stub_path
+        return str(stub_path)
 
     def get_stats(self) -> Dict:
         return {

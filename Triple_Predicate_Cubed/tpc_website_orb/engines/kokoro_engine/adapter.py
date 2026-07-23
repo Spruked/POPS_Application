@@ -15,6 +15,7 @@ import numpy as np
 from typing import Dict, List, Optional, Any
 import sys
 from pathlib import Path
+import tempfile
 
 # Add Kokoro to path
 KOKORO_PATH = Path(__file__).resolve().parents[3] / "kokoro_engine"
@@ -73,10 +74,12 @@ class KokoroAdapter:
     def _fallback_synthesize(self, text: str, voice: str) -> str:
         """Fallback synthesis stub."""
         import time
-        stub_path = f"/tmp/kokoro_stub_{int(time.time())}.txt"
+        output_dir = Path(tempfile.gettempdir()) / "tpc_website_orb"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stub_path = output_dir / f"kokoro_stub_{int(time.time())}.txt"
         with open(stub_path, 'w') as f:
             f.write(f"[KOKORO STUB] Voice: {voice}\nText: {text[:100]}...")
-        return stub_path
+        return str(stub_path)
 
     def list_voices(self) -> List[str]:
         """List available voices."""

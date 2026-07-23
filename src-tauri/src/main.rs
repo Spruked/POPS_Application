@@ -2,6 +2,7 @@
 
 #[path = "mcp/research_server.rs"]
 mod research_server;
+mod local_agent;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -9,6 +10,7 @@ use tauri::api::path::app_data_dir;
 use tauri::{Manager, State};
 use rusqlite::OptionalExtension;
 use research_server::mcp_research_tool;
+use local_agent::{local_agent_chat, local_agent_ocr, local_agent_speak, local_agent_status};
 
 // ─── SQLite Database ──────────────────────────────────────────────
 
@@ -3124,7 +3126,11 @@ fn main() {
             compute_file_hash,
             export_database,
             get_db_path,
-            mcp_research_tool
+            mcp_research_tool,
+            local_agent_status,
+            local_agent_chat,
+            local_agent_speak,
+            local_agent_ocr
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

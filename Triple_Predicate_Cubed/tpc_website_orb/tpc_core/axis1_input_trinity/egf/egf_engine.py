@@ -76,7 +76,7 @@ class EpistemicGravityField:
         # A Posteriori wells (variable mass - empirically weighted)
         for entry in self.a_posteriori_vault.get_all_entries():
             well = GravityWell(
-                signature=np.array(entry['signature']),
+                signature=np.array(entry['input_signature']),
                 mass=entry.get('certainty', 0.7),
                 vault_id=entry['id'],
                 content=entry['content'],

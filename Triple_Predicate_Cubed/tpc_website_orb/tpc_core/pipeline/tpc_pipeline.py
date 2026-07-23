@@ -105,7 +105,10 @@ class TPCPipeline:
 
         # Geometric Glyph
         self.glyph_engine = get_glyph_engine(dimensions=hlsf_dimensions)
-        self.retrieval = get_geometric_retrieval()
+        self.retrieval = get_geometric_retrieval({
+            "a_priori": self.a_priori,
+            "a_posteriori": self.a_posteriori,
+        })
 
         # Drift Ping
         self.drift = get_drift_ping_chain()

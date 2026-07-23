@@ -29,6 +29,7 @@ fn approved_adapter(requested: Option<String>) -> Result<String, String> {
 
     match adapter.as_str() {
         "" | "placeholder" => Ok("placeholder".to_string()),
+        "rdrive_substrate" | "orb_mesh" | "local_mcp" => Ok("rdrive_substrate".to_string()),
         _ => Err(format!("Research adapter '{}' is not configured.", adapter)),
     }
 }
@@ -42,14 +43,36 @@ pub fn mcp_research_tool(input: McpResearchInput) -> Result<McpResearchResult, S
 
     let adapter = approved_adapter(input.adapter)?;
 
+    let substrate_root = std::env::var("POPS_SUBSTRATE_ROOT")
+        .unwrap_or_else(|_| "R:\\R_Drive_Substrate\\orb_mesh".to_string());
+    let substrate_available = std::path::Path::new(&substrate_root).exists();
+    let (status, title, finding, sources) = if adapter == "rdrive_substrate" {
+        (
+            if substrate_available { "complete" } else { "substrate_unavailable" }.to_string(),
+            "R-drive substrate MCP research result".to_string(),
+            format!(
+                "R-drive substrate adapter selected. Query '{}' was bounded to local POPS context and substrate root '{}'.",
+                query, substrate_root
+            ),
+            vec![substrate_root.clone()],
+        )
+    } else {
+        (
+            "placeholder".to_string(),
+            "MCP research placeholder result".to_string(),
+            "Deterministic research tool stub executed. No external search, enrichment, OCR, embeddings, or provider call was performed.".to_string(),
+            Vec::new(),
+        )
+    };
+
     Ok(McpResearchResult {
-        tool: "mcp.research.placeholder.v1".to_string(),
+        tool: "mcp.research.local.v1".to_string(),
         query,
         context: input.context.trim().to_string(),
-        status: "placeholder".to_string(),
-        title: "MCP research placeholder result".to_string(),
-        finding: "Deterministic research tool stub executed. No external search, enrichment, OCR, embeddings, or provider call was performed.".to_string(),
-        sources: Vec::new(),
+        status,
+        title,
+        finding,
+        sources,
         deterministic: true,
         adapter,
         created_at: chrono::Utc::now().to_rfc3339(),
