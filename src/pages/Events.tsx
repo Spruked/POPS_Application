@@ -32,6 +32,7 @@ export default function Events() {
     if (!form.title.trim()) return;
     const event: Event = {
       id: generateId(),
+      caseId: 'primary',
       type: form.type,
       title: form.title,
       date: form.date || new Date().toISOString().split('T')[0],

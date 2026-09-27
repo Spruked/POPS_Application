@@ -23,12 +23,12 @@ pub struct McpResearchResult {
 
 fn approved_adapter(requested: Option<String>) -> Result<String, String> {
     let adapter = requested
-        .unwrap_or_else(|| "placeholder".to_string())
+        .unwrap_or_else(|| "local_mcp".to_string())
         .trim()
         .to_lowercase();
 
     match adapter.as_str() {
-        "" | "placeholder" => Ok("placeholder".to_string()),
+        "" => Ok("local_mcp".to_string()),
         "rdrive_substrate" | "orb_mesh" | "local_mcp" => Ok("rdrive_substrate".to_string()),
         _ => Err(format!("Research adapter '{}' is not configured.", adapter)),
     }
@@ -57,12 +57,7 @@ pub fn mcp_research_tool(input: McpResearchInput) -> Result<McpResearchResult, S
             vec![substrate_root.clone()],
         )
     } else {
-        (
-            "placeholder".to_string(),
-            "MCP research placeholder result".to_string(),
-            "Deterministic research tool stub executed. No external search, enrichment, OCR, embeddings, or provider call was performed.".to_string(),
-            Vec::new(),
-        )
+        return Err("Research adapter unavailable. Configure a local MCP/substrate adapter before running research.".to_string());
     };
 
     Ok(McpResearchResult {

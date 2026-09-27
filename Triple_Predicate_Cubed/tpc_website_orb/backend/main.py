@@ -13,6 +13,9 @@ import uvicorn
 import asyncio
 import json
 import time
+import os
+import urllib.error
+import urllib.request
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -122,6 +125,198 @@ async def reason(request: dict):
         "processing_time_ms": result.processing_time_ms,
         "glyph_signature": result.glyph_signature,
         "depth_trace": result.depth_trace
+    }
+
+
+def _looks_case_specific(text: str) -> bool:
+    request = text.lower()
+    return any(term in request for term in [
+        "my case",
+        "my record",
+        "my evidence",
+        "my order",
+        "my child",
+        "my payment",
+        "summarize",
+        "what happened",
+        "how many",
+        "missed",
+        "denied",
+        "arrears",
+        "custody",
+        "visitation",
+        "contact",
+    ])
+
+
+def _extract_ids(vault_context: str, marker: str) -> list[str]:
+    ids = []
+    for line in vault_context.splitlines():
+        for part in line.split("|"):
+            clean = part.strip()
+            if clean.startswith(marker):
+                value = clean.split("=", 1)[1].strip()
+                if value and value not in ids:
+                    ids.append(value)
+    return ids
+
+
+def _call_llamacpp(endpoint: str, model: str, system_prompt: str, user_prompt: str) -> str:
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "temperature": 0.3,
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=45) as response:
+        body = json.loads(response.read().decode("utf-8"))
+    choices = body.get("choices") or []
+    if not choices:
+        return ""
+    first = choices[0]
+    message = first.get("message") or {}
+    return (message.get("content") or first.get("text") or "").strip()
+
+
+@app.post("/api/v1/pops/chat")
+async def pops_chat(request: dict):
+    """
+    POPS Chat Assistant orchestration endpoint.
+
+    Expected request:
+    {
+        "prompt": "...",
+        "active_page": "...",
+        "site_context": "...",
+        "vault_context": "...",
+        "vault_record_count": 0,
+        "glyph_record_count": 0
+    }
+    """
+    if not pipeline:
+        return {
+            "available": False,
+            "reason": "TPC service unavailable",
+            "response": "",
+        }
+
+    prompt = str(request.get("prompt", "")).strip()
+    active_page = str(request.get("active_page", "")).strip()
+    site_context = str(request.get("site_context", "")).strip()
+    vault_context = str(request.get("vault_context", "")).strip()
+    vault_record_count = int(request.get("vault_record_count") or 0)
+    glyph_record_count = int(request.get("glyph_record_count") or 0)
+
+    if not prompt:
+        raise HTTPException(status_code=400, detail="Prompt required")
+
+    used_record_ids = _extract_ids(vault_context, "record_id")
+    used_glyph_trace_ids = _extract_ids(vault_context, "glyph")
+
+    preflight_input = (
+        f"Stage: POPS assistant input preflight\n"
+        f"Active page: {active_page}\n\n"
+        f"Site context:\n{site_context}\n\n"
+        f"Vault/Glyph Trace context:\n{vault_context or 'No Vault/Glyph Trace records supplied.'}\n\n"
+        f"User prompt:\n{prompt}"
+    )
+    preflight = await pipeline.process(preflight_input, "text", f"pops_pre_{int(time.time() * 1000)}")
+
+    if vault_record_count == 0 and _looks_case_specific(prompt):
+        return {
+            "available": True,
+            "reason": "vault_context_absent",
+            "response": "TPC is available, but no Vault/Glyph Trace records were available for this case-specific request. I can help navigate or create records, but I will not invent case facts without authoritative Vault context.",
+            "model": "",
+            "endpoint": "",
+            "tpc_status": preflight.status.value,
+            "tpc_glyph_signature": preflight.glyph_signature,
+            "used_record_ids": used_record_ids,
+            "used_glyph_trace_ids": used_glyph_trace_ids,
+            "vault_record_count": vault_record_count,
+            "glyph_record_count": glyph_record_count,
+        }
+
+    llama_base = os.environ.get("POPS_LLAMACPP_URL", "http://127.0.0.1:40343").rstrip("/")
+    llama_endpoint = f"{llama_base}/v1/chat/completions"
+    model = os.environ.get("POPS_LLAMACPP_MODEL", "local-qwen")
+
+    system_prompt = (
+        "You are the POPS Chat Assistant operating under TPC control. "
+        "Use only supplied Vault/Glyph Trace context for case facts. "
+        "If the context is absent or incomplete, say what is missing and do not invent facts. "
+        "Keep legal material factual, concise, and review-safe.\n\n"
+        f"TPC preflight status: {preflight.status.value}\n"
+        f"TPC preflight output:\n{preflight.output_text}\n\n"
+        f"Active page: {active_page}\n\n"
+        f"Site context:\n{site_context}\n\n"
+        f"Vault/Glyph Trace context:\n{vault_context or 'No Vault/Glyph Trace records supplied.'}"
+    )
+
+    try:
+        model_response = _call_llamacpp(llama_endpoint, model, system_prompt, prompt)
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        return {
+            "available": False,
+            "reason": f"llama.cpp unavailable: {exc}",
+            "response": "",
+            "model": model,
+            "endpoint": llama_endpoint,
+            "tpc_status": preflight.status.value,
+            "tpc_glyph_signature": preflight.glyph_signature,
+            "used_record_ids": used_record_ids,
+            "used_glyph_trace_ids": used_glyph_trace_ids,
+            "vault_record_count": vault_record_count,
+            "glyph_record_count": glyph_record_count,
+        }
+
+    if not model_response:
+        return {
+            "available": False,
+            "reason": "llama.cpp returned an empty response",
+            "response": "",
+            "model": model,
+            "endpoint": llama_endpoint,
+            "tpc_status": preflight.status.value,
+            "tpc_glyph_signature": preflight.glyph_signature,
+            "used_record_ids": used_record_ids,
+            "used_glyph_trace_ids": used_glyph_trace_ids,
+            "vault_record_count": vault_record_count,
+            "glyph_record_count": glyph_record_count,
+        }
+
+    postflight = await pipeline.process(
+        (
+            "Stage: POPS assistant output control\n"
+            f"Active page: {active_page}\n\n"
+            f"Vault/Glyph Trace context:\n{vault_context or 'No Vault/Glyph Trace records supplied.'}\n\n"
+            f"Candidate response:\n{model_response}"
+        ),
+        "text",
+        f"pops_post_{int(time.time() * 1000)}",
+    )
+
+    return {
+        "available": postflight.status.value == "complete",
+        "reason": "ok" if postflight.status.value == "complete" else "TPC output control failed",
+        "response": model_response,
+        "model": model,
+        "endpoint": llama_endpoint,
+        "tpc_status": postflight.status.value,
+        "tpc_glyph_signature": postflight.glyph_signature or preflight.glyph_signature,
+        "used_record_ids": used_record_ids,
+        "used_glyph_trace_ids": used_glyph_trace_ids,
+        "vault_record_count": vault_record_count,
+        "glyph_record_count": glyph_record_count,
     }
 
 

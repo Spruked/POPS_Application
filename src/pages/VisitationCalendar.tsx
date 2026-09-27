@@ -1,9 +1,11 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { invoke } from '@tauri-apps/api/tauri';
 import { Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useToast } from '../hooks/useToast';
 import { generateId } from '../utils/helpers';
 import { analyzeNarrative } from '../utils/annotationEngine';
+import type { OperationalRecord } from '../types';
 
 type VisitStatus = 'scheduled' | 'completed' | 'denied' | 'missed' | 'late' | 'makeup';
 
@@ -21,7 +23,7 @@ type VisitEntry = {
   createdAt: string;
 };
 
-const STORAGE_KEY = 'pops_visitation_calendar_v1';
+const RECORD_TYPE = 'parenting_time_event';
 
 const STATUS_LABELS: Record<VisitStatus, string> = {
   scheduled: 'Scheduled',
@@ -49,23 +51,47 @@ function toDateKey(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-function loadEntries(): VisitEntry[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    const parsed = raw ? (JSON.parse(raw) as VisitEntry[]) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
+function visitFromOperational(record: OperationalRecord): VisitEntry {
+  const payload = record.payload as unknown as Partial<VisitEntry>;
+  return {
+    id: record.id,
+    date: payload.date || record.date,
+    startTime: payload.startTime || '',
+    endTime: payload.endTime || '',
+    location: payload.location || '',
+    otherParty: payload.otherParty || '',
+    status: (payload.status as VisitStatus) || 'scheduled',
+    notes: payload.notes || '',
+    attemptedContact: payload.attemptedContact || '',
+    orderReference: payload.orderReference || '',
+    createdAt: record.createdAt,
+  };
 }
 
-function saveEntries(entries: VisitEntry[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+function operationalFromVisit(entry: VisitEntry): OperationalRecord {
+  const now = new Date().toISOString();
+  return {
+    id: entry.id,
+    glyphTraceId: `glyph:${RECORD_TYPE}:${entry.id}`,
+    recordType: RECORD_TYPE,
+    caseId: 'default',
+    title: `${STATUS_LABELS[entry.status]} parenting time - ${entry.date}`,
+    status: STATUS_LABELS[entry.status],
+    verificationState: entry.status === 'completed' ? 'Verified' : entry.status === 'denied' ? 'Disputed' : 'Needs Document',
+    sourceProvenance: 'User entered',
+    date: entry.date,
+    linkedRecordIds: [entry.orderReference].filter(Boolean),
+    payload: entry as unknown as Record<string, unknown>,
+    vaultPath: '',
+    createdAt: entry.createdAt || now,
+    updatedAt: now,
+    archived: false,
+  };
 }
 
 export default function VisitationCalendar() {
   const { show } = useToast();
-  const [entries, setEntries] = useState<VisitEntry[]>(() => loadEntries());
+  const [entries, setEntries] = useState<VisitEntry[]>([]);
   const [monthCursor, setMonthCursor] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -83,6 +109,12 @@ export default function VisitationCalendar() {
     attemptedContact: '',
     orderReference: '',
   });
+
+  useEffect(() => {
+    invoke<OperationalRecord[]>('get_operational_records', { recordType: RECORD_TYPE })
+      .then((records) => setEntries(records.map(visitFromOperational)))
+      .catch(() => show('Case Calendar failed to load from Vault database.', 'error'));
+  }, [show]);
 
   const firstDay = monthCursor.getDay();
   const daysInMonth = new Date(monthCursor.getFullYear(), monthCursor.getMonth() + 1, 0).getDate();
@@ -111,7 +143,7 @@ export default function VisitationCalendar() {
     setIsModalOpen(true);
   }
 
-  function handleCreate(e: React.FormEvent) {
+  async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     if (!form.date || !form.startTime || !form.location.trim()) {
       show('Date, start time, and location are required.', 'error');
@@ -129,9 +161,13 @@ export default function VisitationCalendar() {
       createdAt: new Date().toISOString(),
     };
 
-    const next = [created, ...entries];
-    setEntries(next);
-    saveEntries(next);
+    try {
+      await invoke('save_operational_record', { item: operationalFromVisit(created) });
+    } catch {
+      show('Calendar entry failed to save to Vault database.', 'error');
+      return;
+    }
+    setEntries((prev) => [created, ...prev]);
     show('Calendar entry saved.');
 
     const annotation = analyzeNarrative(created.notes || '');
@@ -143,10 +179,14 @@ export default function VisitationCalendar() {
     setForm((prev) => ({ ...prev, notes: '', attemptedContact: '' }));
   }
 
-  function removeEntry(id: string) {
-    const next = entries.filter((entry) => entry.id !== id);
-    setEntries(next);
-    saveEntries(next);
+  async function removeEntry(id: string) {
+    try {
+      await invoke('delete_operational_record', { id });
+    } catch {
+      show('Calendar entry failed to delete from Vault database.', 'error');
+      return;
+    }
+    setEntries((prev) => prev.filter((entry) => entry.id !== id));
     show('Calendar entry removed.');
   }
 

@@ -80,10 +80,11 @@ Settings
 
 Members is for member/account/license/download/access workflows only.
 
-Missing operational subpages currently render through:
+Operational subpages are rendered by the page-specific modules in `src/pages/`,
+with the shared record surface provided by:
 
 ```text
-src/pages/CommandPlaceholder.tsx
+src/pages/OperationalRecordsPage.tsx
 ```
 
 Navigation entries and page ids are wired through:
@@ -106,7 +107,7 @@ src/pages/HowItWorks.tsx
 src/pages/Declaration.tsx
 src/pages/Pledge.tsx
 src/pages/Lexicon.tsx
-src/pages/AccessBrotherhood.tsx
+src/pages/MemberCommand.tsx
 ```
 
 Do not change doctrine wording unless new wording is explicitly provided.
@@ -150,12 +151,12 @@ Current validation checks:
 - high-sensitivity terms are marked `high`
 - required UI behavior flags
 
-## ORB Assistant
+## POPS Assistant
 
-ORB component:
+Assistant component:
 
 ```text
-src/components/OrbAssistant.tsx
+src/components/PopsAssistant.tsx
 ```
 
 Local Ollama defaults:

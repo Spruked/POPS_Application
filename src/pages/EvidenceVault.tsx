@@ -243,6 +243,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
       sha256 = importedFile.sha256;
       const evidence: Evidence = {
         id: evidenceId,
+        caseId: 'primary',
         type: form.type,
         title: form.title,
         description: form.description,
@@ -272,6 +273,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
 
     const evidence: Evidence = {
       id: generateId(),
+      caseId: 'primary',
       type: form.type,
       title: form.title,
       description: form.description,

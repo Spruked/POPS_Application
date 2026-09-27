@@ -29,6 +29,7 @@ export default function CourtOrders() {
     if (!orderForm.title.trim()) return;
     const order: CourtOrder = {
       id: generateId(),
+      caseId: 'primary',
       title: orderForm.title,
       orderDate: orderForm.orderDate,
       effectiveDate: orderForm.effectiveDate,
@@ -50,6 +51,7 @@ export default function CourtOrders() {
     if (!violationForm.description.trim() || !selectedOrderId) return;
     const violation: Violation = {
       id: generateId(),
+      caseId: 'primary',
       orderId: selectedOrderId,
       date: violationForm.date || new Date().toISOString().split('T')[0],
       description: violationForm.description,

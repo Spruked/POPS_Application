@@ -1,5 +1,5 @@
 import { useState, type ElementType } from 'react';
-import { Activity, BookOpen, CalendarDays, ChevronDown, FileText, Gavel, LayoutDashboard, Monitor, Settings, Shield, Users } from 'lucide-react';
+import { Activity, BookOpen, CalendarDays, ChevronDown, FileText, Gavel, GitBranch, LayoutDashboard, Monitor, Settings, Shield, Users } from 'lucide-react';
 import type { Page } from '../types';
 
 type NavItem = { page: Page; label: string; badge?: string };
@@ -7,6 +7,7 @@ type NavSection = { title: string; icon: ElementType; page: Page; items?: NavIte
 
 const sections: NavSection[] = [
   { title: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
+  { title: 'Glyph Trace', icon: GitBranch, page: 'glyphTrace' },
   { title: 'People & Dossiers', icon: Users, page: 'contacts' },
   { title: 'Case Calendar', icon: CalendarDays, page: 'calendar', items: [
     { page: 'calendar', label: 'Case Calendar' },
@@ -19,6 +20,7 @@ const sections: NavSection[] = [
   ] },
   { title: 'Legal', icon: Gavel, page: 'legal', items: [
     { page: 'orders', label: 'Court Orders' }, { page: 'violations', label: 'Violations', badge: 'Risk' },
+    { page: 'childSupportLedger', label: 'Child Support Ledger' },
     { page: 'legalFilings', label: 'Filings' }, { page: 'legalMotions', label: 'Motions' }, { page: 'legalServiceRecords', label: 'Service Records' }, { page: 'legalCourtNotes', label: 'Court Notes' }, { page: 'legalAttorneyPackets', label: 'Attorney Packets' },
   ] },
   { title: 'Events', icon: Activity, page: 'events', items: [
@@ -28,7 +30,7 @@ const sections: NavSection[] = [
     { page: 'evidence', label: 'Evidence Vault', badge: 'SHA' }, { page: 'evidenceHashCheck', label: 'Hash Check' }, { page: 'evidenceChainOfCustody', label: 'Chain of Custody' }, { page: 'evidenceUploads', label: 'Uploads' }, { page: 'evidenceExhibits', label: 'Exhibits' }, { page: 'evidenceMetadata', label: 'Metadata' }, { page: 'evidenceRiskReview', label: 'Risk Review' },
   ] },
   { title: 'Members', icon: Monitor, page: 'member', items: [
-    { page: 'member', label: 'Member Command' }, { page: 'access', label: 'Access' }, { page: 'membersBrotherhood', label: 'Community Bridge', badge: 'Soon' }, { page: 'membersLicense', label: 'License' }, { page: 'membersOpenDoor', label: 'Open Door' }, { page: 'membersSponsor', label: 'Sponsor a Father' }, { page: 'membersAccount', label: 'Account' },
+    { page: 'member', label: 'Member Command' }, { page: 'membersBrotherhood', label: 'Community Bridge', badge: 'Soon' }, { page: 'membersLicense', label: 'License' }, { page: 'membersAccount', label: 'Account' },
   ] },
   { title: 'About', icon: BookOpen, page: 'about', items: [
     { page: 'about', label: 'About P.O.P.S.' }, { page: 'mission', label: 'Mission' }, { page: 'doctrine', label: 'Doctrine' }, { page: 'howItWorks', label: 'How P.O.P.S. Works' }, { page: 'declaration', label: 'Declaration' }, { page: 'pledge', label: 'Creed + Pledge' }, { page: 'lexicon', label: 'Lexicon + Highlights' },
@@ -37,7 +39,7 @@ const sections: NavSection[] = [
     { page: 'reports', label: 'Reports' }, { page: 'reportsAttorneyPacket', label: 'Attorney Packet' }, { page: 'reportsCourtPacket', label: 'Court Packet' }, { page: 'reportsEvidenceIndex', label: 'Evidence Index' }, { page: 'reportsTimelineSummary', label: 'Timeline Summary' }, { page: 'reportsExport', label: 'Export' }, { page: 'reportsPrint', label: 'Print' }, { page: 'reportsReviewFlags', label: 'Review Flags' },
   ] },
   { title: 'Settings', icon: Settings, page: 'settings', items: [
-    { page: 'settings', label: 'Settings' }, { page: 'settingsOrbAssistant', label: 'Assistant Settings' }, { page: 'settingsDataBackup', label: 'Data Backup' }, { page: 'settingsSecurity', label: 'Security' }, { page: 'settingsLocalStorage', label: 'Local Storage' }, { page: 'settingsPreferences', label: 'Preferences' },
+    { page: 'settings', label: 'Settings' }, { page: 'settingsChatAssistant', label: 'Chat Assistant' }, { page: 'settingsDataBackup', label: 'Data Backup' }, { page: 'settingsSecurity', label: 'Security' }, { page: 'settingsLocalStorage', label: 'Local Storage' }, { page: 'settingsPreferences', label: 'Preferences' },
   ] },
 ];
 

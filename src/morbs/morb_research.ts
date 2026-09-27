@@ -54,7 +54,7 @@ export async function runResearchMorb(request: MorbResearchRequest): Promise<Mor
     input: {
       query: topic,
       context: personContext,
-      adapter: "placeholder",
+      adapter: "local_mcp",
     },
   });
 

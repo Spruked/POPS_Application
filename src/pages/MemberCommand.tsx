@@ -1,21 +1,18 @@
-import { BadgeCheck, Download, KeyRound, Mail, ShieldCheck, Users } from 'lucide-react';
+import { BadgeCheck, KeyRound, ShieldCheck, Users } from 'lucide-react';
 
 const memberCards = [
-  { label: 'Member Account', value: 'Local profile', detail: 'Account portal link and local identity status', icon: Users, tone: 'blue' },
+  { label: 'User Profile', value: 'Local profile', detail: 'Local identity and workspace status', icon: Users, tone: 'blue' },
   { label: 'License Status', value: 'Ready', detail: 'Desktop POPS validates local access token', icon: KeyRound, tone: 'blue' },
-  { label: 'Download Access', value: 'Available', detail: 'Installer and release package access', icon: Download, tone: 'blue' },
   { label: 'Review Gates', value: 'Active', detail: 'Exports and record changes require confirmation', icon: ShieldCheck, tone: 'red' },
 ] as const;
 
 const memberActions = [
-  'Member account',
-  'Checkout/payment status',
-  'Download access',
+  'Local profile',
   'License status',
-  'Newsletter opt-in',
-  'Event registration',
-  'Lifeline request status',
-  'Sponsor history',
+  'Vault status',
+  'Audit ledger',
+  'Data backup',
+  'Security settings',
 ];
 
 export default function MemberCommand() {
@@ -24,7 +21,7 @@ export default function MemberCommand() {
       <section className="member-header">
         <div>
           <h2>MEMBER COMMAND</h2>
-          <p>Membership, license, download, and account access for the POPS desktop app.</p>
+          <p>Local profile, license, vault, and access status for the POPS desktop app.</p>
         </div>
         <div className="pipeline-pill">
           <span className="live-dot" />
@@ -52,10 +49,10 @@ export default function MemberCommand() {
       </section>
 
       <section className="member-portal-card">
-        <h3>WEBSITE MEMBER SYSTEM</h3>
+        <h3>LOCAL ACCESS SYSTEM</h3>
         <p>
-          Website handles membership, checkout, newsletter, events, downloads, and license access.
-          Desktop POPS validates license/access token and links users to account portal actions.
+          Desktop POPS validates the local license/access token and keeps product records inside the
+          local workspace.
         </p>
         <div className="member-chip-wrap">
           {memberActions.map((action) => (
@@ -73,7 +70,7 @@ export default function MemberCommand() {
           <div className="activity-dot blue" />
           <div className="member-activity-time">Portal</div>
           <div className="member-activity-body">
-            <div className="member-activity-title">Account, license, and download actions stay under Members.</div>
+            <div className="member-activity-title">Profile, license, and vault status stay under Members.</div>
             <div className="member-activity-subtitle">The main Dashboard remains the app landing page and case overview.</div>
           </div>
           <div className="member-tag blue">MEMBERS</div>
@@ -83,8 +80,8 @@ export default function MemberCommand() {
           <div className="activity-dot blue" />
           <div className="member-activity-time">Access</div>
           <div className="member-activity-body">
-            <div className="member-activity-title">Member workflows link out to website account actions when needed.</div>
-            <div className="member-activity-subtitle">Local app records remain separate from public website membership flows.</div>
+            <div className="member-activity-title">Member workflows stay focused on local product access.</div>
+            <div className="member-activity-subtitle">Local app records remain separate from website sales and public pages.</div>
           </div>
           <div className="member-tag blue">ACCESS</div>
         </div>
@@ -95,8 +92,8 @@ export default function MemberCommand() {
         <div className="member-chip-wrap">
           <span className="member-chip"><BadgeCheck size={14} /> Verify access</span>
           <span className="member-chip"><KeyRound size={14} /> Check license</span>
-          <span className="member-chip"><Download size={14} /> Download package</span>
-          <span className="member-chip"><Mail size={14} /> Account portal</span>
+          <span className="member-chip"><ShieldCheck size={14} /> Vault status</span>
+          <span className="member-chip"><Users size={14} /> Local profile</span>
         </div>
       </section>
     </div>

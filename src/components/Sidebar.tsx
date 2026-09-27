@@ -2,12 +2,12 @@ import { useEffect, useMemo, useState, type ElementType } from 'react';
 import {
   Activity,
   AlertTriangle,
-  BookOpen,
   CalendarDays,
   ChevronDown,
   Database,
   FileText,
   Gavel,
+  GitBranch,
   LayoutDashboard,
   Monitor,
   Settings,
@@ -35,7 +35,8 @@ interface NavSection {
 }
 
 const navSections: NavSection[] = [
-  { title: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
+  { title: 'Case Overview', icon: LayoutDashboard, page: 'dashboard' },
+  { title: 'Audit Trail', icon: GitBranch, page: 'glyphTrace' },
   {
     title: 'People & Dossiers',
     icon: Users,
@@ -65,10 +66,14 @@ const navSections: NavSection[] = [
       { page: 'calendar', label: 'Case Calendar' },
       { page: 'visitation', label: 'Parenting Time & Exchanges' },
       { page: 'calendarCourtDates', label: 'Court Dates & Filing Deadlines' },
-      { page: 'calendarAppointments', label: 'Appointments, Medical & School' },
+      { page: 'calendarAppointments', label: 'Appointments' },
+      { page: 'calendarMedical', label: 'Medical Records' },
+      { page: 'calendarSchool', label: 'School Records' },
       { page: 'calendarAttorneyMeetings', label: 'Attorney & Case Meetings' },
+      { page: 'calendarSupportDeadlines', label: 'Support Deadlines' },
       { page: 'calendarRequiredContacts', label: 'Contact Commitments' },
-      { page: 'calendarReminders', label: 'Reminders & Follow-Ups' },
+      { page: 'calendarReminders', label: 'Reminders' },
+      { page: 'calendarFollowUps', label: 'Follow-Ups' },
     ],
   },
   {
@@ -78,6 +83,7 @@ const navSections: NavSection[] = [
     items: [
       { page: 'orders', label: 'Court Orders' },
       { page: 'violations', label: 'Violations', badge: 'Risk' },
+      { page: 'childSupportLedger', label: 'Child Support Ledger' },
       { page: 'legalFilings', label: 'Filings' },
       { page: 'legalMotions', label: 'Motions' },
       { page: 'legalServiceRecords', label: 'Service Records' },
@@ -113,31 +119,13 @@ const navSections: NavSection[] = [
     ],
   },
   {
-    title: 'Members',
+    title: 'Account & Access',
     icon: Monitor,
     page: 'member',
     items: [
-      { page: 'member', label: 'Member Command' },
-      { page: 'access', label: 'Access' },
-      { page: 'membersBrotherhood', label: 'Community Bridge', badge: 'Soon' },
+      { page: 'member', label: 'Account & Access' },
       { page: 'membersLicense', label: 'License' },
-      { page: 'membersOpenDoor', label: 'Open Door' },
-      { page: 'membersSponsor', label: 'Sponsor a Father' },
       { page: 'membersAccount', label: 'Account' },
-    ],
-  },
-  {
-    title: 'About',
-    icon: BookOpen,
-    page: 'about',
-    items: [
-      { page: 'about', label: 'About P.O.P.S.' },
-      { page: 'mission', label: 'Mission' },
-      { page: 'doctrine', label: 'Doctrine' },
-      { page: 'howItWorks', label: 'How P.O.P.S. Works' },
-      { page: 'declaration', label: 'Declaration' },
-      { page: 'pledge', label: 'Creed + Pledge' },
-      { page: 'lexicon', label: 'Lexicon + Highlights' },
     ],
   },
   {
@@ -161,7 +149,8 @@ const navSections: NavSection[] = [
     page: 'settings',
     items: [
       { page: 'settings', label: 'Settings' },
-      { page: 'settingsOrbAssistant', label: 'Assistant Settings' },
+      { page: 'settingsChatAssistant', label: 'Chat Assistant' },
+      { page: 'diagnostics', label: 'Diagnostics' },
       { page: 'settingsDataBackup', label: 'Data Backup' },
       { page: 'settingsSecurity', label: 'Security' },
       { page: 'settingsLocalStorage', label: 'Local Storage' },

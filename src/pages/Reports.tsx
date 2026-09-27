@@ -4,6 +4,7 @@ import { useReportStore, useEvidenceStore, useOrderStore, useViolationStore, use
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate, formatDateTime, downloadTextFile } from '../utils/helpers';
 import Modal from '../components/Modal';
+import { FullCaseBundleExport } from '../components/FullCaseBundleExport';
 import type { Report } from '../types';
 
 const REPORT_TYPES = [
@@ -159,10 +160,13 @@ COURT ORDERS:
   }
 
   function handleGenerate() {
-    const content = generateReportContent(selectedType);
+    const reportType = REPORT_TYPES.find(r => r.value === selectedType);
+    const rawContent = generateReportContent(selectedType);
+    const content = `# ${reportType?.label || 'POPS Report'}\n\n> Generated locally for review. The full case bundle remains the canonical machine-readable export.\n\n---\n\n${rawContent}`;
     const report: Report = {
       id: generateId(),
-      title: `${REPORT_TYPES.find(r => r.value === selectedType)?.label} — ${formatDate(new Date().toISOString())}`,
+      caseId: 'primary',
+      title: `${reportType?.label} — ${formatDate(new Date().toISOString())}`,
       type: selectedType as Report['type'],
       content,
       generatedAt: new Date().toISOString(),
@@ -173,7 +177,7 @@ COURT ORDERS:
   }
 
   function handleDownload(report: Report) {
-    const filename = `report_${report.type}_${new Date(report.generatedAt).toISOString().split('T')[0]}.txt`;
+    const filename = `report_${report.type}_${new Date(report.generatedAt).toISOString().split('T')[0]}.md`;
     downloadTextFile(filename, report.content);
     show('Report downloaded');
   }
@@ -182,8 +186,10 @@ COURT ORDERS:
     <div>
       <div className="page-header">
         <h2>Reports</h2>
-        <p>Generate formatted reports and attorney packets from your case data</p>
+        <p>Generate reviewable Markdown reports and complete Vault-backed case bundles.</p>
       </div>
+
+      <FullCaseBundleExport />
 
       <div style={{ marginBottom: 20 }}>
         <button className="btn btn-primary" onClick={() => setIsModalOpen(true)}>

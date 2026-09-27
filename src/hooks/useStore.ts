@@ -2,6 +2,34 @@ import { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/tauri';
 import type { Evidence, CourtOrder, Violation, Event, CaseProfile, Report, PlayerDossierRecord, ContactResearchFinding, ContactResearchReceipt } from '../types';
 
+const PLAYER_DOSSIER_STORAGE_KEY = 'pops_player_dossiers_v2';
+
+function browserStorageAvailable() {
+  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+}
+
+function runningInsideTauri() {
+  return typeof window !== 'undefined' && Boolean(
+    (window as Window & { __TAURI__?: unknown }).__TAURI__ ||
+    (window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__ ||
+    window.location.protocol === 'tauri:',
+  );
+}
+
+function loadBrowserDossiers(): PlayerDossierRecord[] {
+  if (!browserStorageAvailable()) return [];
+  try {
+    const raw = window.localStorage.getItem(PLAYER_DOSSIER_STORAGE_KEY);
+    return raw ? JSON.parse(raw) as PlayerDossierRecord[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBrowserDossiers(items: PlayerDossierRecord[]) {
+  if (browserStorageAvailable()) window.localStorage.setItem(PLAYER_DOSSIER_STORAGE_KEY, JSON.stringify(items));
+}
+
 // ─── Evidence ─────────────────────────────────────────────────────
 
 export function useEvidenceStore() {
@@ -216,29 +244,43 @@ export function useReportStore() {
 // ─── Players Dossier ─────────────────────────────────────────────
 
 export function usePlayersStore() {
-  const [items, setItems] = useState<PlayerDossierRecord[]>([]);
+  const tauri = runningInsideTauri();
+  const [items, setItems] = useState<PlayerDossierRecord[]>(() => tauri ? [] : loadBrowserDossiers());
   const [loaded, setLoaded] = useState(false);
 
   const refresh = useCallback(async () => {
+    if (!runningInsideTauri()) {
+      setItems(loadBrowserDossiers());
+      setLoaded(true);
+      return;
+    }
     const data = await invoke<PlayerDossierRecord[]>('get_players_dossier');
     setItems(data);
     setLoaded(true);
   }, []);
 
   useEffect(() => {
+    if (!tauri) {
+      setLoaded(true);
+      return;
+    }
     invoke<PlayerDossierRecord[]>('get_players_dossier').then(data => {
       setItems(data);
       setLoaded(true);
     }).catch(() => setLoaded(true));
-  }, []);
+  }, [tauri]);
+
+  useEffect(() => {
+    if (!tauri) saveBrowserDossiers(items);
+  }, [items, tauri]);
 
   const add = useCallback(async (item: PlayerDossierRecord) => {
-    await invoke('save_player_dossier', { item });
+    if (runningInsideTauri()) await invoke('save_player_dossier', { item });
     setItems(prev => [item, ...prev]);
   }, []);
 
   const remove = useCallback(async (id: string) => {
-    await invoke('delete_player_dossier', { id });
+    if (runningInsideTauri()) await invoke('delete_player_dossier', { id });
     setItems(prev => prev.filter(i => i.id !== id));
   }, []);
 
@@ -250,7 +292,7 @@ export function usePlayersStore() {
       ...updates,
       updatedAt: new Date().toISOString(),
     };
-    await invoke('save_player_dossier', { item: updated });
+    if (runningInsideTauri()) await invoke('save_player_dossier', { item: updated });
     setItems(prev => prev.map(i => i.id === id ? updated : i));
   }, [items]);
 

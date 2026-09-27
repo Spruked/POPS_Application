@@ -3,12 +3,12 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-const DEFAULT_OLLAMA_URL: &str = "http://127.0.0.1:11434";
+const DEFAULT_LLAMACPP_URL: &str = "http://127.0.0.1:40343";
+const DEFAULT_TPC_URL: &str = "http://127.0.0.1:8021";
 const DEFAULT_STT_URL: &str = "http://127.0.0.1:9000";
-const DEFAULT_TTS_URL: &str = "http://127.0.0.1:9880";
 const WINDOWS_QWEN_TTS_URL: &str = "http://127.0.0.1:8020";
 const DEFAULT_SUBSTRATE_ROOT: &str = "R:\\R_Drive_Substrate\\orb_mesh";
-const DEFAULT_OLLAMA_MODEL: &str = "qwen2.5:3b";
+const DEFAULT_LLAMACPP_MODEL: &str = "local-qwen";
 
 #[derive(Debug, Deserialize)]
 pub struct LocalAgentChatInput {
@@ -22,8 +22,18 @@ pub struct LocalAgentChatResult {
     pub response: String,
     pub model: String,
     pub endpoint: String,
+    pub tpc_endpoint: String,
+    pub tpc_status: String,
+    pub tpc_glyph_signature: Option<String>,
+    pub available: bool,
+    pub reason: String,
+    pub used_record_ids: Vec<String>,
+    pub used_glyph_trace_ids: Vec<String>,
     pub substrate_root: String,
     pub used_site_context: bool,
+    pub used_vault_context: bool,
+    pub vault_record_count: usize,
+    pub glyph_record_count: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,8 +76,18 @@ pub struct LocalAgentStatus {
 }
 
 #[derive(Debug, Deserialize)]
-struct OllamaGenerateResponse {
+struct TpcChatResponse {
+    available: bool,
+    reason: Option<String>,
     response: Option<String>,
+    model: Option<String>,
+    endpoint: Option<String>,
+    tpc_status: Option<String>,
+    tpc_glyph_signature: Option<String>,
+    used_record_ids: Option<Vec<String>>,
+    used_glyph_trace_ids: Option<Vec<String>>,
+    vault_record_count: Option<usize>,
+    glyph_record_count: Option<usize>,
 }
 
 fn env_or_default(name: &str, default: &str) -> String {
@@ -99,7 +119,12 @@ async fn probe_get(name: &str, url: String) -> LocalServiceStatus {
     match client.get(&url).send().await {
         Ok(response) => LocalServiceStatus {
             name: name.to_string(),
-            status: if response.status().is_success() { "online" } else { "error" }.to_string(),
+            status: if response.status().is_success() {
+                "online"
+            } else {
+                "error"
+            }
+            .to_string(),
             detail: format!("{} {}", response.status().as_u16(), url),
         },
         Err(error) => LocalServiceStatus {
@@ -113,25 +138,48 @@ async fn probe_get(name: &str, url: String) -> LocalServiceStatus {
 #[tauri::command]
 pub async fn local_agent_status() -> Result<LocalAgentStatus, String> {
     let substrate_root = env_or_default("POPS_SUBSTRATE_ROOT", DEFAULT_SUBSTRATE_ROOT);
-    let ollama = env_or_default("POPS_OLLAMA_URL", DEFAULT_OLLAMA_URL);
+    let llamacpp = env_or_default("POPS_LLAMACPP_URL", DEFAULT_LLAMACPP_URL);
+    let tpc = env_or_default("POPS_TPC_URL", DEFAULT_TPC_URL);
     let stt = env_or_default("POPS_STT_URL", DEFAULT_STT_URL);
-    let tts = env_or_default("POPS_TTS_URL", DEFAULT_TTS_URL);
+    let qwen_tts = env_or_default("POPS_QWEN_TTS_URL", WINDOWS_QWEN_TTS_URL);
 
     let mut services = vec![
-        probe_get("ollama", format!("{}/api/tags", ollama.trim_end_matches('/'))).await,
-        probe_get("faster-whisper", format!("{}/openapi.json", stt.trim_end_matches('/'))).await,
-        probe_get("kokoro-tts", format!("{}/health", tts.trim_end_matches('/'))).await,
-        probe_get("windows-qwen3-tts", format!("{}/health", WINDOWS_QWEN_TTS_URL)).await,
+        probe_get(
+            "windows-llama.cpp",
+            format!("{}/v1/models", llamacpp.trim_end_matches('/')),
+        )
+        .await,
+        probe_get(
+            "tpc-reasoning-pipeline",
+            format!("{}/health", tpc.trim_end_matches('/')),
+        )
+        .await,
+        probe_get(
+            "faster-whisper",
+            format!("{}/openapi.json", stt.trim_end_matches('/')),
+        )
+        .await,
+        probe_get(
+            "windows-qwen-tts",
+            format!("{}/health", qwen_tts.trim_end_matches('/')),
+        )
+        .await,
     ];
 
     let tesseract = Command::new("wsl")
-        .args(["sh", "-lc", "command -v tesseract && tesseract --version | head -1"])
+        .args([
+            "sh",
+            "-lc",
+            "command -v tesseract && tesseract --version | head -1",
+        ])
         .output();
     services.push(match tesseract {
         Ok(output) if output.status.success() => LocalServiceStatus {
             name: "wsl-tesseract".to_string(),
             status: "online".to_string(),
-            detail: String::from_utf8_lossy(&output.stdout).trim().replace('\n', " | "),
+            detail: String::from_utf8_lossy(&output.stdout)
+                .trim()
+                .replace('\n', " | "),
         },
         Ok(output) => LocalServiceStatus {
             name: "wsl-tesseract".to_string(),
@@ -152,90 +200,125 @@ pub async fn local_agent_status() -> Result<LocalAgentStatus, String> {
     })
 }
 
-#[tauri::command]
-pub async fn local_agent_chat(input: LocalAgentChatInput) -> Result<LocalAgentChatResult, String> {
+pub async fn local_agent_chat_with_context(
+    input: LocalAgentChatInput,
+    vault_context: String,
+    vault_record_count: usize,
+    glyph_record_count: usize,
+) -> Result<LocalAgentChatResult, String> {
     let prompt = input.prompt.trim();
     if prompt.is_empty() {
         return Err("Prompt is required.".to_string());
     }
 
-    let ollama = env_or_default("POPS_OLLAMA_URL", DEFAULT_OLLAMA_URL);
-    let model = env_or_default("POPS_OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL);
+    let tpc = env_or_default("POPS_TPC_URL", DEFAULT_TPC_URL);
     let substrate_root = env_or_default("POPS_SUBSTRATE_ROOT", DEFAULT_SUBSTRATE_ROOT);
-    let endpoint = format!("{}/api/generate", ollama.trim_end_matches('/'));
+    let tpc_endpoint = format!("{}/api/v1/pops/chat", tpc.trim_end_matches('/'));
     let client = http_client()?;
-    let system_prompt = format!(
-        "You are Pops, the local POPS guide and assistant agent.\n\
-         Use the prebuilt site map to navigate the app and answer as an expert guide.\n\
-         Use local-first POPS context only. Keep legal material factual and review-safe.\n\
-         R-drive substrate root: {substrate_root}\n\
-         Active page: {}\n\n\
-         Site map and guide context:\n{}\n\n\
-         User request:\n{}",
-        input.active_page.trim(),
-        input.site_context.trim(),
-        prompt
-    );
 
     let response = client
-        .post(&endpoint)
+        .post(&tpc_endpoint)
         .json(&serde_json::json!({
-            "model": model,
-            "prompt": system_prompt,
-            "stream": false
+            "prompt": prompt,
+            "active_page": input.active_page.trim(),
+            "site_context": input.site_context.trim(),
+            "vault_context": vault_context.trim(),
+            "vault_record_count": vault_record_count,
+            "glyph_record_count": glyph_record_count
         }))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| {
+            format!("TPC service unavailable. Local llama.cpp was not called. {error}")
+        })?;
 
     if !response.status().is_success() {
-        return Err(format!("Ollama returned HTTP {}", response.status().as_u16()));
+        return Err(format!(
+            "TPC service returned HTTP {}. Local llama.cpp was not called directly.",
+            response.status().as_u16()
+        ));
     }
 
-    let body: OllamaGenerateResponse = response.json().await.map_err(|e| e.to_string())?;
+    let body: TpcChatResponse = response
+        .json()
+        .await
+        .map_err(|error| format!("TPC service returned an unreadable response. {error}"))?;
+
+    if !body.available {
+        return Ok(LocalAgentChatResult {
+            response: "Chat Assistant is temporarily unavailable.".to_string(),
+            model: body.model.unwrap_or_default(),
+            endpoint: body.endpoint.unwrap_or_default(),
+            tpc_endpoint,
+            tpc_status: body.tpc_status.unwrap_or_else(|| "unavailable".to_string()),
+            tpc_glyph_signature: body.tpc_glyph_signature,
+            available: false,
+            reason: body
+                .reason
+                .unwrap_or_else(|| "TPC service unavailable".to_string()),
+            used_record_ids: body.used_record_ids.unwrap_or_default(),
+            used_glyph_trace_ids: body.used_glyph_trace_ids.unwrap_or_default(),
+            substrate_root,
+            used_site_context: !input.site_context.trim().is_empty(),
+            used_vault_context: !vault_context.trim().is_empty(),
+            vault_record_count: body.vault_record_count.unwrap_or(vault_record_count),
+            glyph_record_count: body.glyph_record_count.unwrap_or(glyph_record_count),
+        });
+    }
+
     Ok(LocalAgentChatResult {
-        response: body.response.unwrap_or_default().trim().to_string(),
-        model,
-        endpoint,
+        response: body.response.unwrap_or_default(),
+        model: body
+            .model
+            .unwrap_or_else(|| DEFAULT_LLAMACPP_MODEL.to_string()),
+        endpoint: body.endpoint.unwrap_or_default(),
+        tpc_endpoint,
+        tpc_status: body.tpc_status.unwrap_or_else(|| "complete".to_string()),
+        tpc_glyph_signature: body.tpc_glyph_signature,
+        available: true,
+        reason: body.reason.unwrap_or_else(|| "ok".to_string()),
+        used_record_ids: body.used_record_ids.unwrap_or_default(),
+        used_glyph_trace_ids: body.used_glyph_trace_ids.unwrap_or_default(),
         substrate_root,
         used_site_context: !input.site_context.trim().is_empty(),
+        used_vault_context: !vault_context.trim().is_empty(),
+        vault_record_count: body.vault_record_count.unwrap_or(vault_record_count),
+        glyph_record_count: body.glyph_record_count.unwrap_or(glyph_record_count),
     })
 }
 
 #[tauri::command]
-pub async fn local_agent_speak(input: LocalAgentSpeakInput) -> Result<LocalAgentSpeakResult, String> {
+pub async fn local_agent_speak(
+    input: LocalAgentSpeakInput,
+) -> Result<LocalAgentSpeakResult, String> {
     let text = input.text.trim();
     if text.is_empty() {
         return Err("Speech text is required.".to_string());
     }
 
-    let tts = env_or_default("POPS_TTS_URL", DEFAULT_TTS_URL);
+    let qwen_tts = env_or_default("POPS_QWEN_TTS_URL", WINDOWS_QWEN_TTS_URL);
     let client = http_client()?;
 
     let candidates = [
         (
-            format!("{}/speak", tts.trim_end_matches('/')),
+            format!("{}/synthesize", qwen_tts.trim_end_matches('/')),
             serde_json::json!({
                 "text": text,
-                "voice": input.voice.clone().unwrap_or_else(|| "af_bella".to_string())
+                "voice": input.voice.clone().unwrap_or_else(|| "default".to_string())
             }),
         ),
         (
-            format!("{}/synthesize", WINDOWS_QWEN_TTS_URL),
+            format!("{}/speak", qwen_tts.trim_end_matches('/')),
             serde_json::json!({
                 "text": text,
-                "voice": input.voice.clone().unwrap_or_else(|| "af_bella".to_string())
+                "voice": input.voice.clone().unwrap_or_else(|| "default".to_string())
             }),
         ),
     ];
 
     let mut last_error = String::new();
     for (endpoint, payload) in candidates {
-        let response = client
-            .post(&endpoint)
-            .json(&payload)
-            .send()
-            .await;
+        let response = client.post(&endpoint).json(&payload).send().await;
 
         let Ok(response) = response else {
             last_error = response.err().map(|e| e.to_string()).unwrap_or_default();
@@ -263,37 +346,10 @@ pub async fn local_agent_speak(input: LocalAgentSpeakInput) -> Result<LocalAgent
     }
 
     Err(if last_error.is_empty() {
-        "No local TTS endpoint responded.".to_string()
+        "No Windows Qwen TTS endpoint responded.".to_string()
     } else {
         last_error
     })
-        /*
-        client
-        .post(&endpoint)
-        .json(&serde_json::json!({
-            "text": text,
-            "voice": input.voice.unwrap_or_else(|| "af_bella".to_string())
-        }))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let audio_path = raw
-        .get("audio_path")
-        .or_else(|| raw.get("path"))
-        .and_then(|value| value.as_str())
-        .map(|value| value.to_string());
-
-    Ok(LocalAgentSpeakResult {
-        ok: true,
-        endpoint,
-        audio_path,
-        raw,
-    })
-    */
 }
 
 #[tauri::command]

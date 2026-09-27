@@ -1,0 +1,28 @@
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE files
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Dependencies
+node_modules/
+__pycache__/
+
+# Product user data
+user_data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets
+secrets.json
+*.key
+
+# Temporary
+temp/
+*.tmp

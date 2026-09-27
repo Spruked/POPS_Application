@@ -1,134 +1,68 @@
-import { useEffect, useMemo, useState } from "react";
-import { ClipboardList, Plus, Search, ShieldCheck, Users } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { ClipboardList, ImagePlus, Plus, Search, ShieldCheck, Trash2, Users } from "lucide-react";
 import { usePlayersStore } from "../hooks/useStore";
+import { useToast } from "../hooks/useToast";
 import { generateId } from "../utils/helpers";
-import type { PlayerDossierRecord, PlayerInteractionLog } from "../types";
+import type { DossierCategory, PlayerDossierProfile, PlayerDossierRecord, PlayerInteractionLog } from "../types";
 import ContactResearchPanel from "../components/ContactResearchPanel";
 
-const ROLES = [
-  "Other parent",
-  "Child",
-  "Guardian",
-  "Family member",
-  "Current attorney",
-  "Former attorney",
-  "Consulted attorney",
-  "Opposing attorney",
-  "Judge",
-  "Court clerk",
-  "Prosecutor",
-  "Guardian ad litem",
-  "Mediator",
-  "Parent coordinator",
-  "Case worker",
-  "School staff",
-  "Medical provider",
-  "Therapy provider",
-  "Counseling provider",
-  "Police officer",
-  "Law-enforcement contact",
-  "Child support contact",
-  "Agency contact",
-  "Witness",
-  "Advocate",
-  "Consultant",
-  "Other involved person",
-];
+const ROLES = ["Other parent", "Child", "Guardian", "Family member", "Current attorney", "Former attorney", "Consulted attorney", "Opposing attorney", "Judge", "Court clerk", "Prosecutor", "Guardian ad litem", "Mediator", "Parent coordinator", "Case worker", "School staff", "Medical provider", "Therapy provider", "Counseling provider", "Police officer", "Law-enforcement contact", "Child support contact", "Agency contact", "Witness", "Advocate", "Consultant", "Other involved person"];
+const CATEGORY_LABELS: Record<string, string> = { all: "All People", attorney: "Attorneys", court_clerk: "Court / Clerk", judge: "Judges", other_parent: "Other Parent", child: "Children", medical: "Medical", school: "School", witness: "Witnesses", support_agency: "Support Agency", law_enforcement: "Law Enforcement", advocate: "Advocates", required_contact: "Required Contacts", history: "Dossier History" };
+const ROLE_CATEGORY: Record<string, DossierCategory> = { "Current attorney": "attorney", "Former attorney": "attorney", "Consulted attorney": "attorney", "Opposing attorney": "attorney", Judge: "judge", "Court clerk": "court_clerk", "Medical provider": "medical", "Therapy provider": "medical", "Counseling provider": "medical", "School staff": "school", "Police officer": "law_enforcement", "Law-enforcement contact": "law_enforcement", Witness: "witness", Advocate: "advocate", "Agency contact": "support_agency", "Child support contact": "support_agency", Child: "child", "Other parent": "other_parent" };
+const EMPTY_PROFILE: PlayerDossierProfile = { photoDataUrl: "", photoCaption: "", aliases: "", pronouns: "", dateOfBirth: "", preferredContactMethod: "", bestContactTime: "", courtRole: "", jurisdiction: "", identifiers: "", employment: "", education: "", language: "", accessibility: "", communicationPlatforms: "", socialHandles: "", emergencyContact: "", relatedChildren: "", knownAssociates: "", sourceProvenance: "", verificationStatus: "Needs verification", riskNotes: "", additionalDetails: "" };
 
-function newContact(): PlayerDossierRecord {
+function categoryForRole(role: string): DossierCategory { return ROLE_CATEGORY[role] || "all"; }
+
+function newContact(category: DossierCategory): PlayerDossierRecord {
   const now = new Date().toISOString();
-  return {
-    id: generateId(), name: "", role: "Other involved person", knownRole: "", organization: "", phoneNumbers: "", emails: "", address: "", relationshipToCase: "", status: "active", lastContact: "", followUpNeeded: false, conflictConcern: false, documentsRequested: "", documentsProvided: "", linkedEvidence: "", linkedIncidents: "", linkedTimelineEvents: "", privateFieldNotes: "", courtSafeNotes: "", interactionHistory: [], createdAt: now, updatedAt: now,
-  };
+  const role = category === "attorney" ? "Current attorney" : category === "judge" ? "Judge" : category === "court_clerk" ? "Court clerk" : category === "medical" ? "Medical provider" : category === "school" ? "School staff" : category === "witness" ? "Witness" : category === "law_enforcement" ? "Police officer" : category === "advocate" ? "Advocate" : category === "child" ? "Child" : category === "other_parent" ? "Other parent" : "Other involved person";
+  return { id: generateId(), caseIds: ["primary"], category: category === "history" ? "all" : category, name: "", role, knownRole: "", organization: "", phoneNumbers: "", emails: "", address: "", relationshipToCase: "", status: "active", lastContact: "", followUpNeeded: false, conflictConcern: false, documentsRequested: "", documentsProvided: "", linkedEvidence: "", linkedIncidents: "", linkedTimelineEvents: "", privateFieldNotes: "", courtSafeNotes: "", profile: { ...EMPTY_PROFILE }, interactionHistory: [], createdAt: now, updatedAt: now };
 }
 
-export default function ContactsDossier() {
+function categoryMatches(item: PlayerDossierRecord, category: DossierCategory) {
+  if (category === "all") return true;
+  if (category === "history") return (item.interactionHistory || []).length > 0;
+  return item.category === category || ((!item.category || item.category === "all") && categoryForRole(item.role) === category);
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) { return <section className="card" style={{ marginTop: 16, marginBottom: 0 }}><div className="card-header"><h3>{title}</h3></div><div className="form-grid">{children}</div></section>; }
+function Field({ label, value, onChange, type = "text", wide = false }: { label: string; value: string; onChange: (value: string) => void; type?: string; wide?: boolean }) { return <div className="form-group" style={wide ? { gridColumn: "1 / -1" } : undefined}><label>{label}</label>{type === "textarea" ? <textarea value={value} onChange={(event) => onChange(event.target.value)} rows={4} /> : <input type={type} value={value} onChange={(event) => onChange(event.target.value)} />}</div>; }
+
+export default function ContactsDossier({ category = "all" }: { category?: DossierCategory }) {
   const store = usePlayersStore();
+  const { show } = useToast();
   const [selectedId, setSelectedId] = useState("");
   const [query, setQuery] = useState("");
   const [note, setNote] = useState("");
-  const contacts = store.items;
+  const contacts = store.items.filter((item) => categoryMatches(item, category));
   const selected = contacts.find((item) => item.id === selectedId) ?? contacts[0];
+  const categoryLabel = CATEGORY_LABELS[category] || "People";
 
-  useEffect(() => {
-    if (!selectedId && contacts.length) setSelectedId(contacts[0].id);
-  }, [contacts, selectedId]);
+  useEffect(() => { setSelectedId(contacts[0]?.id || ""); }, [category, store.items.length]);
+  const shown = useMemo(() => { const term = query.trim().toLowerCase(); if (!term) return contacts; return contacts.filter((item) => [item.name, item.role, item.organization, item.profile?.aliases].join(" ").toLowerCase().includes(term)); }, [contacts, query]);
 
-  const shown = useMemo(() => {
-    const term = query.trim().toLowerCase();
-    if (!term) return contacts;
-    return contacts.filter((item) => [item.name, item.role, item.organization].join(" ").toLowerCase().includes(term));
-  }, [contacts, query]);
+  async function update(updates: Partial<PlayerDossierRecord>) { if (!selected) return; try { await store.update(selected.id, updates); } catch (error) { show(error instanceof Error ? error.message : String(error)); } }
+  async function updateProfile(updates: Partial<PlayerDossierProfile>) { if (!selected) return; await update({ profile: { ...EMPTY_PROFILE, ...(selected.profile || {}), ...updates } }); }
+  async function addContact() { const contact = newContact(category); try { await store.add(contact); setSelectedId(contact.id); show(`${categoryLabel} dossier created`); } catch (error) { show(error instanceof Error ? error.message : String(error)); } }
+  async function removeContact() { if (!selected || !window.confirm(`Delete the dossier for ${selected.name || "this person"}?`)) return; try { await store.remove(selected.id); setSelectedId(""); show("Dossier deleted"); } catch (error) { show(error instanceof Error ? error.message : String(error)); } }
+  async function addNote() { if (!selected || !note.trim()) return; const entry: PlayerInteractionLog = { id: generateId(), when: new Date().toISOString(), summary: `[Note] ${note.trim()}` }; await update({ interactionHistory: [entry, ...(selected.interactionHistory || [])] }); setNote(""); }
+  function handlePhoto(file: File | undefined) { if (!file || !selected) return; if (!file.type.startsWith("image/")) { show("Choose an image file."); return; } const reader = new FileReader(); reader.onload = () => void updateProfile({ photoDataUrl: String(reader.result), photoCaption: file.name }); reader.readAsDataURL(file); }
 
-  function update(updates: Partial<PlayerDossierRecord>) {
-    if (selected) void store.update(selected.id, updates);
-  }
-
-  function addContact() {
-    const contact = newContact();
-    void store.add(contact);
-    setSelectedId(contact.id);
-  }
-
-  function addNote() {
-    if (!selected || !note.trim()) return;
-    const entry: PlayerInteractionLog = { id: generateId(), when: new Date().toISOString(), summary: `[Note] ${note.trim()}` };
-    update({ interactionHistory: [entry, ...(selected.interactionHistory || [])] });
-    setNote("");
-  }
-
-  if (!selected) {
-    return <div><div className="page-header"><h2>People & Dossiers</h2><p>Keep people, information, and follow-ups organized.</p></div><div className="card"><button className="btn btn-primary" type="button" onClick={addContact}><Plus size={16} /> Add a person</button></div></div>;
-  }
-
-  return (
-    <div>
-      <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-        <div><h2>People & Dossiers</h2><p>Know who is involved, keep the facts together, and stay ready.</p></div>
-        <button className="btn btn-primary" type="button" onClick={addContact}><Plus size={16} /> Add a person</button>
-      </div>
-
-      <div className="card" style={{ display: "flex", alignItems: "flex-start", gap: 10, borderLeft: "3px solid var(--accent-green)", padding: "14px 16px" }}>
-        <ShieldCheck size={18} className="trust-green" />
-        <div><strong>Stay organized and clear-headed.</strong><p style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 12 }}>Keep what you know, what you find, and what still needs confirmation in the same dossier.</p></div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr)", gap: 16 }}>
-        <aside className="card" style={{ marginBottom: 0, padding: 14 }}>
-          <div style={{ display: "flex", gap: 9, alignItems: "center", marginBottom: 12 }}><Users size={18} className="trust-blue" /><div><strong>People</strong><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{contacts.length} total</div></div></div>
-          <div className="search-bar" style={{ marginBottom: 10 }}><Search size={14} color="var(--text-dim)" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a person..." /></div>
-          <div style={{ display: "grid", gap: 7 }}>
-            {shown.map((contact) => <button key={contact.id} className={`nav-item ${contact.id === selected.id ? "active" : ""}`} style={{ margin: 0 }} type="button" onClick={() => setSelectedId(contact.id)}><div style={{ textAlign: "left" }}><div style={{ fontSize: 13, fontWeight: 700 }}>{contact.name || "Unnamed person"}</div><div style={{ fontSize: 11, color: "var(--text-dim)" }}>{contact.role}</div></div>{contact.followUpNeeded && <span className="nav-badge">Follow-up</span>}</button>)}
-          </div>
-        </aside>
-
-        <main className="card" style={{ marginBottom: 0 }}>
-          <div className="card-header"><div><div style={{ color: "var(--text-dim)", fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Private dossier</div><h3 style={{ marginTop: 5 }}>{selected.name || "New person"}</h3></div><span className="badge badge-blue">{selected.status}</span></div>
-          <div className="form-grid">
-            <div className="form-group"><label>Name</label><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></div>
-            <div className="form-group"><label>Role</label><select value={selected.role} onChange={(event) => update({ role: event.target.value })}>{ROLES.map((role) => <option key={role}>{role}</option>)}</select></div>
-            <div className="form-group"><label>Organization / office</label><input value={selected.organization} onChange={(event) => update({ organization: event.target.value })} /></div>
-            <div className="form-group"><label>Known title</label><input value={selected.knownRole} onChange={(event) => update({ knownRole: event.target.value })} /></div>
-            <div className="form-group"><label>Phone</label><input value={selected.phoneNumbers} onChange={(event) => update({ phoneNumbers: event.target.value })} /></div>
-            <div className="form-group"><label>Email</label><input value={selected.emails} onChange={(event) => update({ emails: event.target.value })} /></div>
-            <div className="form-group"><label>Relationship</label><input value={selected.relationshipToCase} onChange={(event) => update({ relationshipToCase: event.target.value })} /></div>
-            <div className="form-group"><label>Last contact</label><input type="date" value={selected.lastContact} onChange={(event) => update({ lastContact: event.target.value })} /></div>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginTop: 18 }}>
-            <div className="card" style={{ marginBottom: 0, padding: 14, borderLeft: "3px solid var(--accent-purple)" }}><div className="card-header" style={{ marginBottom: 9 }}><h3>Private notes</h3></div><textarea value={selected.privateFieldNotes} onChange={(event) => update({ privateFieldNotes: event.target.value })} placeholder="Your observations, reminders, and questions." /></div>
-            <div className="card" style={{ marginBottom: 0, padding: 14, borderLeft: "3px solid var(--accent-amber)" }}><div className="card-header" style={{ marginBottom: 9 }}><h3>Neutral summary</h3></div><textarea value={selected.courtSafeNotes} onChange={(event) => update({ courtSafeNotes: event.target.value })} placeholder="Source-supported, professional wording for later review." /></div>
-          </div>
-
-          <ContactResearchPanel contact={selected} onUpdate={update} />
-
-          <div className="card" style={{ marginTop: 16, marginBottom: 0, padding: 14 }}>
-            <div className="card-header" style={{ marginBottom: 10 }}><h3>History</h3></div>
-            <div style={{ display: "flex", gap: 8, marginBottom: 12 }}><input style={{ flex: 1 }} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a note or a follow-up..." /><button className="btn btn-ghost btn-sm" type="button" onClick={addNote}><ClipboardList size={14} /> Add</button></div>
-            <div className="timeline">{(selected.interactionHistory || []).length === 0 && <div className="empty-state" style={{ padding: 16 }}><p>No history yet.</p></div>}{(selected.interactionHistory || []).map((entry) => <div className="timeline-item" key={entry.id}><div className={`timeline-dot ${entry.summary.startsWith("[Research") ? "blue" : "amber"}`} /><div className="timeline-content"><h4>{entry.summary}</h4><div className="date">{new Date(entry.when).toLocaleString()}</div></div></div>)}</div>
-          </div>
-        </main>
-      </div>
+  const profile = selected?.profile || EMPTY_PROFILE;
+  return <div>
+    <div className="page-header" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}><div><h2>{categoryLabel}</h2><p>Thorough, local-first dossier records for every person connected to the case.</p></div><button className="btn btn-primary" type="button" onClick={() => void addContact()}><Plus size={16} /> Add {category === "all" ? "a person" : `${categoryLabel.toLowerCase()} person`}</button></div>
+    <div className="card" style={{ display: "flex", alignItems: "flex-start", gap: 10, borderLeft: "3px solid var(--accent-green)", padding: "14px 16px" }}><ShieldCheck size={18} className="trust-green" /><div><strong>Category follows the person’s role.</strong><p style={{ marginTop: 4, color: "var(--text-muted)", fontSize: 12 }}>Choose a role in the dossier and POPS assigns the matching category automatically. Records stay local and auditable.</p></div></div>
+    <div style={{ display: "grid", gridTemplateColumns: "300px minmax(0, 1fr)", gap: 16, marginTop: 16 }}>
+      <aside className="card" style={{ marginBottom: 0, padding: 14 }}><div style={{ display: "flex", gap: 9, alignItems: "center", marginBottom: 12 }}><Users size={18} className="trust-blue" /><div><strong>{categoryLabel}</strong><div style={{ fontSize: 11, color: "var(--text-muted)" }}>{contacts.length} record{contacts.length === 1 ? "" : "s"}</div></div></div><div className="search-bar" style={{ marginBottom: 10 }}><Search size={14} color="var(--text-dim)" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Find ${categoryLabel.toLowerCase()}...`} /></div><div style={{ display: "grid", gap: 7 }}>{shown.map((contact) => <button key={contact.id} className={`nav-item ${contact.id === selected?.id ? "active" : ""}`} style={{ margin: 0 }} type="button" onClick={() => setSelectedId(contact.id)}><div style={{ textAlign: "left" }}><div style={{ fontSize: 13, fontWeight: 700 }}>{contact.name || "Unnamed person"}</div><div style={{ fontSize: 11, color: "var(--text-dim)" }}>{contact.role} · {CATEGORY_LABELS[contact.category] || "Uncategorized"}</div></div>{contact.followUpNeeded && <span className="nav-badge">Follow-up</span>}</button>)}</div>{!shown.length && <div className="empty-state" style={{ padding: 16 }}><p>No {categoryLabel.toLowerCase()} records yet.</p><button className="btn btn-primary btn-sm" type="button" onClick={() => void addContact()}><Plus size={14} /> Add person</button></div>}</aside>
+      {!selected ? <main className="card" style={{ marginBottom: 0 }}><div className="empty-state"><Users size={42} /><p>Create a person to open the full dossier.</p><button className="btn btn-primary" type="button" onClick={() => void addContact()}><Plus size={16} /> Add person</button></div></main> : <main>
+        <section className="card" style={{ marginBottom: 0 }}><div className="card-header"><div><div style={{ color: "var(--text-dim)", fontSize: 10, textTransform: "uppercase", letterSpacing: 1 }}>Private dossier · {CATEGORY_LABELS[selected.category] || categoryLabel}</div><h3 style={{ marginTop: 5 }}>{selected.name || "New person"}</h3></div><div style={{ display: "flex", gap: 8, alignItems: "center" }}><span className="badge badge-blue">{selected.status}</span><button className="btn btn-ghost btn-sm" type="button" onClick={() => void removeContact()}><Trash2 size={14} /> Delete</button></div></div><div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: 18, alignItems: "start" }}><div><div style={{ width: 150, height: 150, borderRadius: 12, border: "1px dashed var(--border-color)", overflow: "hidden", display: "grid", placeItems: "center", background: "rgba(255,255,255,.03)" }}>{profile.photoDataUrl ? <img src={profile.photoDataUrl} alt={selected.name ? `${selected.name} dossier portrait` : "Person dossier portrait"} style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImagePlus size={30} color="var(--text-dim)" />}</div><label className="btn btn-ghost btn-sm" style={{ marginTop: 8, display: "inline-flex", cursor: "pointer" }}><ImagePlus size={14} /> Add image<input type="file" accept="image/*" hidden onChange={(event) => handlePhoto(event.target.files?.[0])} /></label><div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>Stored locally with this dossier.</div></div><div className="form-grid"><Field label="Full name" value={selected.name} onChange={(value) => void update({ name: value })} /><div className="form-group"><label>Role</label><select value={selected.role} onChange={(event) => void update({ role: event.target.value, category: categoryForRole(event.target.value) })}>{ROLES.map((role) => <option key={role}>{role}</option>)}</select></div><Field label="Known title" value={selected.knownRole} onChange={(value) => void update({ knownRole: value })} /><Field label="Aliases / names used" value={profile.aliases} onChange={(value) => void updateProfile({ aliases: value })} /><Field label="Pronouns" value={profile.pronouns} onChange={(value) => void updateProfile({ pronouns: value })} /><Field label="Date of birth" type="date" value={profile.dateOfBirth} onChange={(value) => void updateProfile({ dateOfBirth: value })} /><div className="form-group"><label>Dossier status</label><select value={selected.status} onChange={(event) => void update({ status: event.target.value as PlayerDossierRecord["status"] })}><option value="active">Active</option><option value="watch">Watch</option><option value="inactive">Inactive</option></select></div><Field label="Category assigned" value={CATEGORY_LABELS[selected.category] || "All People"} onChange={() => undefined} /></div></div></section>
+        <Section title="Contact & Location"><Field label="Organization / office" value={selected.organization} onChange={(value) => void update({ organization: value })} /><Field label="Phone numbers" value={selected.phoneNumbers} onChange={(value) => void update({ phoneNumbers: value })} /><Field label="Email addresses" value={selected.emails} onChange={(value) => void update({ emails: value })} /><Field label="Primary address" value={selected.address} onChange={(value) => void update({ address: value })} /><Field label="Preferred contact method" value={profile.preferredContactMethod} onChange={(value) => void updateProfile({ preferredContactMethod: value })} /><Field label="Best contact time" value={profile.bestContactTime} onChange={(value) => void updateProfile({ bestContactTime: value })} /><Field label="Communication platforms" value={profile.communicationPlatforms} onChange={(value) => void updateProfile({ communicationPlatforms: value })} /><Field label="Social handles / public profiles" value={profile.socialHandles} onChange={(value) => void updateProfile({ socialHandles: value })} /></Section>
+        <Section title="Case, Court & Relationship"><Field label="Relationship to case" value={selected.relationshipToCase} onChange={(value) => void update({ relationshipToCase: value })} /><Field label="Court role" value={profile.courtRole} onChange={(value) => void updateProfile({ courtRole: value })} /><Field label="Jurisdiction / venue" value={profile.jurisdiction} onChange={(value) => void updateProfile({ jurisdiction: value })} /><Field label="Case / docket identifiers" value={profile.identifiers} onChange={(value) => void updateProfile({ identifiers: value })} /><Field label="Related children" value={profile.relatedChildren} onChange={(value) => void updateProfile({ relatedChildren: value })} /><Field label="Emergency contact" value={profile.emergencyContact} onChange={(value) => void updateProfile({ emergencyContact: value })} /><Field label="Known associates" value={profile.knownAssociates} onChange={(value) => void updateProfile({ knownAssociates: value })} /><Field label="Last contact" type="date" value={selected.lastContact} onChange={(value) => void update({ lastContact: value })} /></Section>
+        <Section title="Background & Verification"><Field label="Employment / practice" value={profile.employment} onChange={(value) => void updateProfile({ employment: value })} /><Field label="Education / credentials" value={profile.education} onChange={(value) => void updateProfile({ education: value })} /><Field label="Language / communication needs" value={profile.language} onChange={(value) => void updateProfile({ language: value })} /><Field label="Accessibility / accommodation" value={profile.accessibility} onChange={(value) => void updateProfile({ accessibility: value })} /><Field label="Source provenance" value={profile.sourceProvenance} onChange={(value) => void updateProfile({ sourceProvenance: value })} /><Field label="Verification status" value={profile.verificationStatus} onChange={(value) => void updateProfile({ verificationStatus: value })} /><Field label="Photo caption / source" value={profile.photoCaption} onChange={(value) => void updateProfile({ photoCaption: value })} /><Field label="Additional details" value={profile.additionalDetails} type="textarea" wide onChange={(value) => void updateProfile({ additionalDetails: value })} /></Section>
+        <Section title="Documents, Links & Follow-Up"><Field label="Documents requested" value={selected.documentsRequested} type="textarea" onChange={(value) => void update({ documentsRequested: value })} /><Field label="Documents provided" value={selected.documentsProvided} type="textarea" onChange={(value) => void update({ documentsProvided: value })} /><Field label="Linked evidence IDs" value={selected.linkedEvidence} type="textarea" onChange={(value) => void update({ linkedEvidence: value })} /><Field label="Linked incident IDs" value={selected.linkedIncidents} type="textarea" onChange={(value) => void update({ linkedIncidents: value })} /><Field label="Linked timeline event IDs" value={selected.linkedTimelineEvents} type="textarea" onChange={(value) => void update({ linkedTimelineEvents: value })} /><Field label="Risk / conflict notes" value={profile.riskNotes} type="textarea" onChange={(value) => void updateProfile({ riskNotes: value })} /><Field label="Private field notes" value={selected.privateFieldNotes} type="textarea" wide onChange={(value) => void update({ privateFieldNotes: value })} /><Field label="Neutral / court-safe notes" value={selected.courtSafeNotes} type="textarea" wide onChange={(value) => void update({ courtSafeNotes: value })} /></Section>
+        <ContactResearchPanel contact={selected} onUpdate={(updates) => void update(updates)} />
+        <section className="card" style={{ marginTop: 16, marginBottom: 0 }}><div className="card-header"><h3>History & Interactions</h3></div><div style={{ display: "flex", gap: 8, marginBottom: 12 }}><input style={{ flex: 1 }} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a factual note, contact, or follow-up..." /><button className="btn btn-ghost btn-sm" type="button" onClick={() => void addNote()}><ClipboardList size={14} /> Add</button></div><div className="timeline">{(selected.interactionHistory || []).length === 0 && <div className="empty-state" style={{ padding: 16 }}><p>No history yet.</p></div>}{(selected.interactionHistory || []).map((entry) => <div className="timeline-item" key={entry.id}><div className="timeline-dot amber" /><div className="timeline-content"><h4>{entry.summary}</h4><div className="date">{new Date(entry.when).toLocaleString()}</div></div></div>)}</div></section>
+      </main>}
     </div>
-  );
+  </div>;
 }

@@ -76,3 +76,6 @@ tree.txt
 
 desktop.ini
 $RECYCLE.BIN/
+
+# Local inventory snapshots
+tree.txt

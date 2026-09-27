@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   CalendarClock,
   ChevronRight,
-  CloudCog,
   FilePlus2,
   FileText,
   FolderPlus,
@@ -10,15 +9,14 @@ import {
   Mic,
   Minimize2,
   Send,
-  Settings2,
   ShieldCheck,
   Sparkles,
   X,
 } from "lucide-react";
+import { invoke } from "@tauri-apps/api/tauri";
 import { morbManager, type MorbStatus } from "../morbs/morb_manager";
 import type { Page } from "../types";
 
-export type AssistantMode = "core" | "local" | "api";
 type DockState = "open" | "minimized" | "closed";
 
 type AssistantMessage = {
@@ -38,6 +36,17 @@ type QuickAction = {
   detail: string;
   page: Page;
   icon: typeof CalendarClock;
+};
+
+type LocalAgentChatResult = {
+  response: string;
+  model: string;
+  endpoint: string;
+  substrate_root: string;
+  used_site_context: boolean;
+  tpc_endpoint: string;
+  tpc_status: string;
+  available: boolean;
 };
 
 const PAGE_LABELS: Partial<Record<Page, string>> = {
@@ -78,7 +87,7 @@ function makeCoreResponse(input: string, activePage: Page) {
   if (request.includes("report") || request.includes("summary")) {
     return "I can help prepare a draft report from the records you choose. It remains a draft for review until a future governed export workflow confirms what is included.";
   }
-  return `You are on ${currentPage}. In Core Guided Mode, I can help you navigate, structure a factual record, prepare a draft, or point you to the right POPS workspace.`;
+  return `You are on ${currentPage}. In guided chat mode, I can help you navigate, structure a factual record, prepare a draft, or point you to the right POPS workspace.`;
 }
 
 function isResearchRequest(input: string) {
@@ -92,16 +101,28 @@ function researchStatusCopy(status: MorbStatus) {
   return "Research ready";
 }
 
+function buildSiteContext() {
+  return [
+    "Dashboard: overview of case records and vault status.",
+    "People & Dossiers: contact dossier records and auditable person/contact notes.",
+    "Case Calendar: hearings, appointments, deadlines, parenting time, and exchanges.",
+    "Legal: court orders, violations, filings, motions, service records, court notes, attorney packets, and child support ledger.",
+    "Evidence Vault: imported files, hashes, chain of custody, exhibits, metadata, and risk review.",
+    "Events & Timeline: incidents, communication, denied visits, good-faith attempts, and case notes.",
+    "Reports: court packets, evidence indexes, timeline summaries, export, print, and review flags.",
+    "Settings: chat assistant, data backup, security, local storage, and preferences.",
+  ].join("\n");
+}
+
 export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantProps) {
   const [messages, setMessages] = useState<AssistantMessage[]>([
     { id: "welcome", role: "assistant", text: "I'm here to help you organize your records, prepare a draft, find a section, or work through the page you are on." },
   ]);
   const [input, setInput] = useState("");
-  const [mode, setMode] = useState<AssistantMode>("core");
   const [dockState, setDockState] = useState<DockState>("open");
-  const [engineOpen, setEngineOpen] = useState(false);
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
   const [morbStatus, setMorbStatus] = useState<MorbStatus>("idle");
+  const [isThinking, setIsThinking] = useState(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -134,7 +155,22 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
       return;
     }
 
-    addAssistantMessage(makeCoreResponse(trimmed, activePage));
+    setIsThinking(true);
+    try {
+      const result = await invoke<LocalAgentChatResult>("local_agent_chat", {
+        input: {
+          prompt: trimmed,
+          active_page: PAGE_LABELS[activePage] || activePage,
+          site_context: buildSiteContext(),
+        },
+      });
+      addAssistantMessage(result.response || "The local llama.cpp server returned an empty response.");
+      setSetupNotice(`${result.available ? "Local model response complete" : "Local model unavailable"} via ${result.tpc_endpoint} (${result.tpc_status}).`);
+    } catch (error) {
+      addAssistantMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsThinking(false);
+    }
   }
 
   function handleQuickAction(action: QuickAction) {
@@ -142,44 +178,35 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
     addAssistantMessage(`I opened ${PAGE_LABELS[action.page] || action.label}. I can help you work through it one factual step at a time.`);
   }
 
-  function selectMode(nextMode: AssistantMode) {
-    setMode(nextMode);
-    if (nextMode === "core") setSetupNotice("Core Guided Mode is active. It does not require a language model.");
-    if (nextMode === "local") setSetupNotice("Recommended Local Model is selected for setup. POPS remains in Core Guided Mode until a compatible local model and runtime adapter are installed.");
-    if (nextMode === "api") setSetupNotice("Custom API Model is selected for setup. Provider configuration, privacy review, and an approved context boundary are required before an external model can be used.");
-  }
-
-  const modeLabel = mode === "core" ? "Core Guided Mode" : mode === "local" ? "Recommended Local Model" : "Custom API Model";
-
   if (dockState !== "open") {
     return (
-      <aside className={`pops-assistant-launcher pops-assistant-launcher-${dockState}`} aria-label="Pops assistant">
-        <button type="button" onClick={() => setDockState("open")} title={dockState === "minimized" ? "Restore Pops" : "Open Pops"}>
+      <aside className={`pops-assistant-launcher pops-assistant-launcher-${dockState}`} aria-label="Chat assistant">
+        <button type="button" onClick={() => setDockState("open")} title={dockState === "minimized" ? "Restore chat assistant" : "Open chat assistant"}>
           <span className="pops-launcher-mark">P</span>
-          {dockState === "closed" && <span>Open Pops!</span>}
+          {dockState === "closed" && <span>Open chat</span>}
         </button>
       </aside>
     );
   }
 
   return (
-    <aside className="pops-assistant-dock" aria-label="Pops private guide">
+    <aside className="pops-assistant-dock" aria-label="Chat assistant">
       <div className="pops-assistant-shell">
         <header className="pops-assistant-header">
           <div>
-            <div className="pops-wordmark">Pops!</div>
-            <p>Your private guide</p>
+            <div className="pops-wordmark">Chat Assistant</div>
+            <p>LLM-ready private chat</p>
           </div>
           <div className="pops-header-actions">
-            <button className="pops-header-button" type="button" onClick={() => setDockState("minimized")} title="Minimize Pops to the bottom corner" aria-label="Minimize Pops to the bottom corner"><Minimize2 size={17} /></button>
-            <button className="pops-header-button" type="button" onClick={() => setDockState("closed")} title="Close Pops" aria-label="Close Pops"><X size={17} /></button>
+            <button className="pops-header-button" type="button" onClick={() => setDockState("minimized")} title="Minimize chat assistant to the bottom corner" aria-label="Minimize chat assistant to the bottom corner"><Minimize2 size={17} /></button>
+            <button className="pops-header-button" type="button" onClick={() => setDockState("closed")} title="Close chat assistant" aria-label="Close chat assistant"><X size={17} /></button>
             <div className="pops-presence-mark" aria-hidden="true"><span>P</span></div>
           </div>
         </header>
 
         <section className="pops-private-status">
           <ShieldCheck size={16} aria-hidden="true" />
-          <div><strong>Private workspace</strong><span>Guidance stays inside POPS unless you choose an external assistant engine.</span></div>
+          <div><strong>Private workspace</strong><span>Chat guidance is routed through guided mode or the local TPC pipeline.</span></div>
         </section>
 
         <section className="pops-private-status" aria-label="Research status">
@@ -188,7 +215,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         </section>
 
         <section className="pops-conversation" aria-live="polite" ref={messageListRef}>
-          {messages.map((message) => <article className={`pops-message pops-message-${message.role}`} key={message.id}><span className="pops-message-label">{message.role === "assistant" ? "Pops!" : "You"}</span><p>{message.text}</p></article>)}
+          {messages.map((message) => <article className={`pops-message pops-message-${message.role}`} key={message.id}><span className="pops-message-label">{message.role === "assistant" ? "Assistant" : "You"}</span><p>{message.text}</p></article>)}
         </section>
 
         <section className="pops-action-list" aria-label="Suggested things to do">
@@ -199,24 +226,14 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         </section>
 
         <form className="pops-composer" onSubmit={(event) => { event.preventDefault(); handleSend(); }}>
-          <textarea aria-label="Ask Pops" onChange={(event) => setInput(event.target.value)} placeholder="Ask Pops! or describe what happened..." rows={2} value={input} />
+          <textarea aria-label="Ask chat assistant" onChange={(event) => setInput(event.target.value)} placeholder="Ask the assistant or describe what happened..." rows={2} value={input} />
           <div className="pops-composer-actions">
             <button className="pops-icon-button" type="button" title="Dictation setup" aria-label="Dictation setup" onClick={() => setSetupNotice("Dictation will use the approved POPS input adapter. It places editable text here and never submits a record automatically.")}><Mic size={17} /></button>
-            <button className="pops-send-button" type="submit" aria-label="Send message to Pops"><Send size={17} /></button>
+            <button className="pops-send-button" type="submit" aria-label="Send message to chat assistant" disabled={isThinking}>{isThinking ? <Sparkles size={17} /> : <Send size={17} />}</button>
           </div>
         </form>
 
-        <section className="pops-engine">
-          <button className="pops-engine-trigger" type="button" onClick={() => setEngineOpen((current) => !current)} aria-expanded={engineOpen}>
-            <span><Settings2 size={16} /><span><strong>Assistant Engine</strong><small>{modeLabel}</small></span></span><ChevronRight className={engineOpen ? "pops-rotate" : ""} size={17} />
-          </button>
-          {engineOpen && <div className="pops-engine-options">
-            <button className={mode === "core" ? "active" : ""} type="button" onClick={() => selectMode("core")}><ShieldCheck size={16} /><span><strong>Core Guided Mode</strong><small>No LLM required</small></span></button>
-            <button className={mode === "local" ? "active" : ""} type="button" onClick={() => selectMode("local")}><Sparkles size={16} /><span><strong>Install Local Model</strong><small>Recommended for richer conversation</small></span></button>
-            <button className={mode === "api" ? "active" : ""} type="button" onClick={() => selectMode("api")}><CloudCog size={16} /><span><strong>Use API Model</strong><small>Bring your own provider and key</small></span></button>
-            {setupNotice && <p className="pops-engine-notice">{setupNotice}</p>}
-          </div>}
-        </section>
+        {setupNotice && <p className="pops-engine-notice">{setupNotice}</p>}
       </div>
     </aside>
   );

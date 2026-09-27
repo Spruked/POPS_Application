@@ -1,20 +1,153 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod local_agent;
 #[path = "mcp/research_server.rs"]
 mod research_server;
-mod local_agent;
 
+use local_agent::{
+    local_agent_chat_with_context, local_agent_ocr, local_agent_speak, local_agent_status,
+    LocalAgentChatInput, LocalAgentChatResult,
+};
+use research_server::mcp_research_tool;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::path::{Path, PathBuf};
 use tauri::api::path::app_data_dir;
 use tauri::{Manager, State};
-use rusqlite::OptionalExtension;
-use research_server::mcp_research_tool;
-use local_agent::{local_agent_chat, local_agent_ocr, local_agent_speak, local_agent_status};
 
 // ─── SQLite Database ──────────────────────────────────────────────
 
 struct DbConn(std::sync::Mutex<rusqlite::Connection>);
+struct VaultRoot(PathBuf);
+
+fn runtime_vault_system_dir(config: &tauri::Config) -> Result<PathBuf, String> {
+    if let Ok(explicit_root) = std::env::var("POPS_VAULT_SYSTEM_DIR") {
+        let explicit_path = PathBuf::from(explicit_root);
+        if !explicit_path.as_os_str().is_empty() {
+            return Ok(explicit_path);
+        }
+    }
+
+    if let Ok(current_exe) = std::env::current_exe() {
+        for ancestor in current_exe.ancestors() {
+            let candidate = ancestor.join("Vault_System");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Some(project_root) = manifest_dir.parent() {
+        return Ok(project_root.join("Vault_System"));
+    }
+
+    let app_dir = app_data_dir(config).ok_or("No app dir")?;
+    Ok(app_dir.join("Vault_System"))
+}
+
+fn vault_database_dir(vault_root: &Path) -> PathBuf {
+    vault_root.join("database")
+}
+
+fn vault_database_path(vault_root: &Path) -> PathBuf {
+    vault_database_dir(vault_root).join("proof_of_presence.db")
+}
+
+fn vault_data_dir(vault_root: &Path, name: &str) -> PathBuf {
+    vault_root.join(name)
+}
+
+fn ensure_vault_system_layout(vault_root: &Path) -> Result<(), String> {
+    for dir in [
+        vault_database_dir(vault_root),
+        vault_data_dir(vault_root, "evidence_originals"),
+        vault_data_dir(vault_root, "communication_exports"),
+        vault_data_dir(vault_root, "case_bundles"),
+        vault_data_dir(vault_root, "exports"),
+        vault_data_dir(vault_root, "runtime_cache"),
+        vault_data_dir(vault_root, "derived_state_cache"),
+        vault_data_dir(vault_root, "temp_exports"),
+        vault_data_dir(vault_root, "dossiers").join("contacts"),
+        vault_data_dir(vault_root, "child_support_ledger"),
+        vault_data_dir(vault_root, "operational_records"),
+        vault_data_dir(vault_root, "browser_records"),
+    ] {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn copy_file_if_missing(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() || destination.exists() {
+        return Ok(());
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::copy(source, destination).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn copy_dir_contents_if_missing(source: &Path, destination: &Path) -> Result<(), String> {
+    if !source.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_contents_if_missing(&source_path, &destination_path)?;
+        } else {
+            copy_file_if_missing(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn migrate_legacy_app_data(config: &tauri::Config, vault_root: &Path) -> Result<(), String> {
+    let Some(legacy_dir) = app_data_dir(config) else {
+        return Ok(());
+    };
+    if legacy_dir == vault_root {
+        return Ok(());
+    }
+
+    for file_name in [
+        "proof_of_presence.db",
+        "proof_of_presence.db-wal",
+        "proof_of_presence.db-shm",
+    ] {
+        copy_file_if_missing(
+            &legacy_dir.join(file_name),
+            &vault_database_dir(vault_root).join(file_name),
+        )?;
+    }
+
+    for dir_name in [
+        "evidence_originals",
+        "communication_exports",
+        "case_bundles",
+        "exports",
+        "runtime_cache",
+        "derived_state_cache",
+        "temp_exports",
+        "dossiers",
+        "child_support_ledger",
+        "operational_records",
+        "browser_records",
+    ] {
+        copy_dir_contents_if_missing(
+            &legacy_dir.join(dir_name),
+            &vault_data_dir(vault_root, dir_name),
+        )?;
+    }
+
+    Ok(())
+}
 
 fn init_db(path: &str) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open(path).expect("open db");
@@ -22,6 +155,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         "BEGIN;
         CREATE TABLE IF NOT EXISTS evidence (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             type TEXT NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
@@ -83,6 +217,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         );
         CREATE TABLE IF NOT EXISTS incidents (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             type TEXT NOT NULL,
             title TEXT NOT NULL,
             date TEXT NOT NULL,
@@ -105,6 +240,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         );
         CREATE TABLE IF NOT EXISTS court_orders (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             title TEXT NOT NULL,
             order_date TEXT,
             effective_date TEXT,
@@ -116,6 +252,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         );
         CREATE TABLE IF NOT EXISTS violations (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             order_id TEXT NOT NULL,
             date TEXT,
             description TEXT,
@@ -126,6 +263,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         );
         CREATE TABLE IF NOT EXISTS events (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             type TEXT NOT NULL,
             title TEXT NOT NULL,
             date TEXT,
@@ -133,6 +271,53 @@ fn init_db(path: &str) -> rusqlite::Connection {
             related_evidence_ids TEXT,
             created_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS child_support_payments (
+            id TEXT PRIMARY KEY,
+            monthly_amount_due TEXT NOT NULL,
+            due_date TEXT NOT NULL,
+            amount_paid TEXT,
+            payment_date TEXT,
+            payment_method TEXT,
+            state_case_number TEXT,
+            confirmation_number TEXT,
+            support_category TEXT NOT NULL,
+            source_status TEXT NOT NULL,
+            official_balance TEXT,
+            arrears_balance TEXT,
+            receipt_file_name TEXT,
+            receipt_file_size INTEGER NOT NULL DEFAULT 0,
+            receipt_sha256 TEXT,
+            agency_statement_name TEXT,
+            agency_statement_sha256 TEXT,
+            correction_note TEXT,
+            dispute_note TEXT,
+            missed_payment_claim TEXT,
+            certified_record INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_child_support_due_date ON child_support_payments(due_date);
+        CREATE INDEX IF NOT EXISTS idx_child_support_status ON child_support_payments(source_status);
+        CREATE TABLE IF NOT EXISTS operational_records (
+            id TEXT PRIMARY KEY,
+            glyph_trace_id TEXT NOT NULL,
+            record_type TEXT NOT NULL,
+            case_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            verification_state TEXT NOT NULL,
+            source_provenance TEXT NOT NULL,
+            date TEXT,
+            linked_record_ids_json TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            vault_path TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            archived INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_operational_records_type ON operational_records(record_type, updated_at);
+        CREATE INDEX IF NOT EXISTS idx_operational_records_glyph ON operational_records(glyph_trace_id);
+        CREATE INDEX IF NOT EXISTS idx_operational_records_case ON operational_records(case_id);
         CREATE TABLE IF NOT EXISTS case_calendar_documents (
             document_id TEXT PRIMARY KEY,
             calendar_category TEXT NOT NULL,
@@ -174,8 +359,43 @@ fn init_db(path: &str) -> rusqlite::Connection {
             notes TEXT,
             updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS case_matters (
+            id TEXT PRIMARY KEY,
+            parent_case_id TEXT,
+            case_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            case_number TEXT NOT NULL,
+            court_name TEXT NOT NULL,
+            judge_name TEXT NOT NULL,
+            status TEXT NOT NULL,
+            lifecycle_stage TEXT NOT NULL,
+            opened_date TEXT NOT NULL,
+            closed_date TEXT NOT NULL,
+            next_deadline TEXT NOT NULL,
+            next_hearing_date TEXT NOT NULL,
+            order_ids_json TEXT NOT NULL,
+            evidence_ids_json TEXT NOT NULL,
+            event_ids_json TEXT NOT NULL,
+            document_ids_json TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS case_alerts (
+            id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL,
+            alert_type TEXT NOT NULL,
+            severity TEXT NOT NULL,
+            title TEXT NOT NULL,
+            details TEXT NOT NULL,
+            due_date TEXT NOT NULL,
+            resolved INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_case_alerts_case ON case_alerts(case_id, resolved, due_date);
         CREATE TABLE IF NOT EXISTS reports (
             id TEXT PRIMARY KEY,
+            case_id TEXT NOT NULL DEFAULT 'primary',
             title TEXT NOT NULL,
             type TEXT NOT NULL,
             content TEXT NOT NULL,
@@ -183,6 +403,8 @@ fn init_db(path: &str) -> rusqlite::Connection {
         );
         CREATE TABLE IF NOT EXISTS players_dossier (
             id TEXT PRIMARY KEY,
+            case_ids_json TEXT NOT NULL DEFAULT '[\"primary\"]',
+            category TEXT NOT NULL DEFAULT 'other',
             name TEXT NOT NULL,
             role TEXT NOT NULL,
             known_role TEXT NOT NULL,
@@ -202,6 +424,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
             linked_timeline_events TEXT NOT NULL,
             private_field_notes TEXT NOT NULL,
             court_safe_notes TEXT NOT NULL,
+            profile_json TEXT NOT NULL DEFAULT '{}',
             interaction_history_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
@@ -274,6 +497,38 @@ fn init_db(path: &str) -> rusqlite::Connection {
         [],
     );
     let _ = conn.execute(
+        "ALTER TABLE players_dossier ADD COLUMN category TEXT NOT NULL DEFAULT 'other'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE players_dossier ADD COLUMN profile_json TEXT NOT NULL DEFAULT '{}'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE players_dossier ADD COLUMN case_ids_json TEXT NOT NULL DEFAULT '[\"primary\"]'",
+        [],
+    );
+    for table in [
+        "evidence", "incidents", "court_orders", "violations", "events",
+        "child_support_payments", "reports", "players_dossier", "contact_research_findings",
+        "case_calendar_documents",
+    ] {
+        let _ = conn.execute(
+            &format!("ALTER TABLE {table} ADD COLUMN case_id TEXT NOT NULL DEFAULT 'primary'"),
+            [],
+        );
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO case_matters (
+            id, parent_case_id, case_type, title, case_number, court_name, judge_name, status,
+            lifecycle_stage, opened_date, closed_date, next_deadline, next_hearing_date,
+            order_ids_json, evidence_ids_json, event_ids_json, document_ids_json, notes,
+            created_at, updated_at
+        ) VALUES ('primary', NULL, 'primary_custody', 'Primary Custody / Family Case', '', '', '', 'active', 'filing', '', '', '', '', '[]', '[]', '[]', '[]', '', ?1, ?1)",
+        [&now],
+    );
+    let _ = conn.execute(
         "ALTER TABLE audit_ledger ADD COLUMN ledger_entry_hash TEXT",
         [],
     );
@@ -343,9 +598,15 @@ fn init_db(path: &str) -> rusqlite::Connection {
 
 // ─── Data Structures ─────────────────────────────────────────────
 
+fn default_case_id() -> String {
+    "primary".to_string()
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct EvidenceItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     #[serde(rename = "type")]
     ev_type: String,
     title: String,
@@ -439,6 +700,78 @@ struct CaseSummaryResult {
     last_updated: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaseMatterItem {
+    id: String,
+    #[serde(rename = "parentCaseId")]
+    parent_case_id: Option<String>,
+    #[serde(rename = "caseType")]
+    case_type: String,
+    title: String,
+    #[serde(rename = "caseNumber")]
+    case_number: String,
+    #[serde(rename = "courtName")]
+    court_name: String,
+    #[serde(rename = "judgeName")]
+    judge_name: String,
+    status: String,
+    #[serde(rename = "lifecycleStage")]
+    lifecycle_stage: String,
+    #[serde(rename = "openedDate")]
+    opened_date: String,
+    #[serde(rename = "closedDate")]
+    closed_date: String,
+    #[serde(rename = "nextDeadline")]
+    next_deadline: String,
+    #[serde(rename = "nextHearingDate")]
+    next_hearing_date: String,
+    #[serde(rename = "orderIds")]
+    order_ids: Vec<String>,
+    #[serde(rename = "evidenceIds")]
+    evidence_ids: Vec<String>,
+    #[serde(rename = "eventIds")]
+    event_ids: Vec<String>,
+    #[serde(rename = "documentIds")]
+    document_ids: Vec<String>,
+    notes: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaseAlertItem {
+    id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
+    #[serde(rename = "alertType")]
+    alert_type: String,
+    severity: String,
+    title: String,
+    details: String,
+    #[serde(rename = "dueDate")]
+    due_date: String,
+    resolved: bool,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CaseOverviewDataResult {
+    #[serde(rename = "primaryCase")]
+    primary_case: CaseMatterItem,
+    #[serde(rename = "relatedCases")]
+    related_cases: Vec<CaseMatterItem>,
+    alerts: Vec<CaseAlertItem>,
+    #[serde(rename = "activeOrderCount")]
+    active_order_count: usize,
+    #[serde(rename = "upcomingDeadlineCount")]
+    upcoming_deadline_count: usize,
+    #[serde(rename = "crossCaseEvidenceCount")]
+    cross_case_evidence_count: usize,
+}
+
 #[derive(Debug, Serialize)]
 struct FullIntegrityCheckResult {
     success: bool,
@@ -488,6 +821,8 @@ struct ExportReceipt {
 #[derive(Serialize, Deserialize, Clone)]
 struct CourtOrderItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     title: String,
     #[serde(rename = "orderDate")]
     order_date: String,
@@ -507,6 +842,8 @@ struct CourtOrderItem {
 #[derive(Serialize, Deserialize, Clone)]
 struct ViolationItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     #[serde(rename = "orderId")]
     order_id: String,
     date: String,
@@ -522,6 +859,8 @@ struct ViolationItem {
 #[derive(Serialize, Deserialize, Clone)]
 struct EventItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     #[serde(rename = "type")]
     ev_type: String,
     title: String,
@@ -531,6 +870,105 @@ struct EventItem {
     related_evidence_ids: Vec<String>,
     #[serde(rename = "createdAt")]
     created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct ChildSupportPaymentItem {
+    id: String,
+    #[serde(rename = "monthlyAmountDue")]
+    monthly_amount_due: String,
+    #[serde(rename = "dueDate")]
+    due_date: String,
+    #[serde(rename = "amountPaid")]
+    amount_paid: String,
+    #[serde(rename = "paymentDate")]
+    payment_date: String,
+    #[serde(rename = "paymentMethod")]
+    payment_method: String,
+    #[serde(rename = "stateCaseNumber")]
+    state_case_number: String,
+    #[serde(rename = "confirmationNumber")]
+    confirmation_number: String,
+    #[serde(rename = "supportCategory")]
+    support_category: String,
+    #[serde(rename = "sourceStatus")]
+    source_status: String,
+    #[serde(rename = "officialBalance")]
+    official_balance: String,
+    #[serde(rename = "arrearsBalance")]
+    arrears_balance: String,
+    #[serde(rename = "receiptFileName")]
+    receipt_file_name: String,
+    #[serde(rename = "receiptFileSize")]
+    receipt_file_size: i64,
+    #[serde(rename = "receiptSha256")]
+    receipt_sha256: String,
+    #[serde(rename = "agencyStatementName")]
+    agency_statement_name: String,
+    #[serde(rename = "agencyStatementSha256")]
+    agency_statement_sha256: String,
+    #[serde(rename = "correctionNote")]
+    correction_note: String,
+    #[serde(rename = "disputeNote")]
+    dispute_note: String,
+    #[serde(rename = "missedPaymentClaim")]
+    missed_payment_claim: String,
+    #[serde(rename = "certifiedRecord")]
+    certified_record: bool,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct OperationalRecordItem {
+    id: String,
+    #[serde(rename = "glyphTraceId")]
+    glyph_trace_id: String,
+    #[serde(rename = "recordType")]
+    record_type: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
+    title: String,
+    status: String,
+    #[serde(rename = "verificationState")]
+    verification_state: String,
+    #[serde(rename = "sourceProvenance")]
+    source_provenance: String,
+    date: String,
+    #[serde(rename = "linkedRecordIds")]
+    linked_record_ids: Vec<String>,
+    payload: serde_json::Value,
+    #[serde(rename = "vaultPath")]
+    vault_path: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    archived: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct GlyphTraceSummaryItem {
+    #[serde(rename = "recordId")]
+    record_id: String,
+    #[serde(rename = "glyphTraceId")]
+    glyph_trace_id: String,
+    #[serde(rename = "recordType")]
+    record_type: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
+    title: String,
+    status: String,
+    #[serde(rename = "verificationState")]
+    verification_state: String,
+    #[serde(rename = "updatedAt")]
+    updated_at: String,
+    #[serde(rename = "vaultPath")]
+    vault_path: String,
+    #[serde(rename = "linkedRecordIds")]
+    linked_record_ids: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -659,6 +1097,8 @@ struct CaseProfile {
 #[derive(Serialize, Deserialize, Clone)]
 struct ReportItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     title: String,
     #[serde(rename = "type")]
     report_type: String,
@@ -674,9 +1114,54 @@ struct PlayerInteractionLog {
     summary: String,
 }
 
+#[derive(Default, Serialize, Deserialize, Clone)]
+struct PlayerDossierProfile {
+    #[serde(rename = "photoDataUrl")]
+    photo_data_url: String,
+    #[serde(rename = "photoCaption")]
+    photo_caption: String,
+    aliases: String,
+    pronouns: String,
+    #[serde(rename = "dateOfBirth")]
+    date_of_birth: String,
+    #[serde(rename = "preferredContactMethod")]
+    preferred_contact_method: String,
+    #[serde(rename = "bestContactTime")]
+    best_contact_time: String,
+    #[serde(rename = "courtRole")]
+    court_role: String,
+    jurisdiction: String,
+    identifiers: String,
+    employment: String,
+    education: String,
+    language: String,
+    accessibility: String,
+    #[serde(rename = "communicationPlatforms")]
+    communication_platforms: String,
+    #[serde(rename = "socialHandles")]
+    social_handles: String,
+    #[serde(rename = "emergencyContact")]
+    emergency_contact: String,
+    #[serde(rename = "relatedChildren")]
+    related_children: String,
+    #[serde(rename = "knownAssociates")]
+    known_associates: String,
+    #[serde(rename = "sourceProvenance")]
+    source_provenance: String,
+    #[serde(rename = "verificationStatus")]
+    verification_status: String,
+    #[serde(rename = "riskNotes")]
+    risk_notes: String,
+    #[serde(rename = "additionalDetails")]
+    additional_details: String,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 struct PlayerDossierItem {
     id: String,
+    #[serde(rename = "caseIds")]
+    case_ids: Vec<String>,
+    category: String,
     name: String,
     role: String,
     #[serde(rename = "knownRole")]
@@ -709,6 +1194,7 @@ struct PlayerDossierItem {
     private_field_notes: String,
     #[serde(rename = "courtSafeNotes")]
     court_safe_notes: String,
+    profile: PlayerDossierProfile,
     #[serde(rename = "interactionHistory")]
     interaction_history: Vec<PlayerInteractionLog>,
     #[serde(rename = "createdAt")]
@@ -902,6 +1388,8 @@ struct CommunicationImportResult {
 
 #[derive(Deserialize)]
 struct IncidentInput {
+    #[serde(rename = "caseId", default = "default_case_id")]
+    case_id: String,
     #[serde(rename = "type")]
     incident_type: String,
     title: String,
@@ -933,6 +1421,8 @@ struct IncidentInput {
 #[derive(Serialize)]
 struct IncidentItem {
     id: String,
+    #[serde(rename = "caseId")]
+    case_id: String,
     #[serde(rename = "type")]
     incident_type: String,
     title: String,
@@ -1386,12 +1876,13 @@ fn save_evidence(db: State<DbConn>, item: EvidenceItem) -> Result<(), String> {
 
     conn.execute(
         "INSERT OR REPLACE INTO evidence (
-            id, type, title, description, date, file_path, sha256, tags,
+            id, case_id, type, title, description, date, file_path, sha256, tags,
             file_name, file_size, file_type, trust_glyph_risk,
             source_description, original_modified_at, imported_at, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
         rusqlite::params![
             &item.id,
+            &item.case_id,
             &item.ev_type,
             &item.title,
             &item.description,
@@ -1425,7 +1916,7 @@ fn get_evidence(db: State<DbConn>) -> Result<Vec<EvidenceItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, type, title, description, date, file_path, sha256, tags,
+            "SELECT id, case_id, type, title, description, date, file_path, sha256, tags,
             file_name, file_size, file_type, trust_glyph_risk,
             source_description, original_modified_at, imported_at, created_at
          FROM evidence ORDER BY created_at DESC",
@@ -1433,28 +1924,29 @@ fn get_evidence(db: State<DbConn>) -> Result<Vec<EvidenceItem>, String> {
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let tags_raw: String = row.get(7)?;
+            let tags_raw: String = row.get(8)?;
             Ok(EvidenceItem {
                 id: row.get(0)?,
-                ev_type: row.get(1)?,
-                title: row.get(2)?,
-                description: row.get(3)?,
-                date: row.get(4)?,
-                file_path: row.get(5)?,
-                sha256: row.get(6)?,
+                case_id: row.get(1)?,
+                ev_type: row.get(2)?,
+                title: row.get(3)?,
+                description: row.get(4)?,
+                date: row.get(5)?,
+                file_path: row.get(6)?,
+                sha256: row.get(7)?,
                 tags: tags_raw
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect(),
-                file_name: row.get(8)?,
-                file_size: row.get(9)?,
-                file_type: row.get(10)?,
-                trust_glyph_risk: row.get(11)?,
-                source_description: row.get(12)?,
-                original_modified_at: row.get(13)?,
-                imported_at: row.get(14)?,
-                created_at: row.get(15)?,
+                file_name: row.get(9)?,
+                file_size: row.get(10)?,
+                file_type: row.get(11)?,
+                trust_glyph_risk: row.get(12)?,
+                source_description: row.get(13)?,
+                original_modified_at: row.get(14)?,
+                imported_at: row.get(15)?,
+                created_at: row.get(16)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1591,8 +2083,7 @@ fn get_evidence_metadata(db: State<DbConn>, evidence_id: String) -> Result<Strin
 
 #[tauri::command]
 fn record_chain_of_custody(db: State<DbConn>, payload: String) -> Result<String, String> {
-    let input: ChainOfCustodyPayload =
-        serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let input: ChainOfCustodyPayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let metadata_json = serde_json::json!({
         "operation": input.operation,
@@ -1623,7 +2114,10 @@ fn export_pdf(payload: String) -> Result<String, String> {
 
 #[tauri::command]
 fn export_timeline(document_id: String) -> Result<String, String> {
-    export_receipt(format!("exports/timeline-{}.json", sanitize_file_name(&document_id)))
+    export_receipt(format!(
+        "exports/timeline-{}.json",
+        sanitize_file_name(&document_id)
+    ))
 }
 
 #[tauri::command]
@@ -1666,6 +2160,135 @@ fn get_case_overview(db: State<DbConn>) -> Result<String, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let summary = case_summary_from_db(&conn, "default".to_string())?;
     serde_json::to_string(&vec![summary]).map_err(|e| e.to_string())
+}
+
+fn default_primary_case_item() -> CaseMatterItem {
+    let now = chrono::Utc::now().to_rfc3339();
+    CaseMatterItem {
+        id: "primary".to_string(),
+        parent_case_id: None,
+        case_type: "primary_custody".to_string(),
+        title: "Primary Custody / Family Case".to_string(),
+        case_number: String::new(),
+        court_name: String::new(),
+        judge_name: String::new(),
+        status: "active".to_string(),
+        lifecycle_stage: "filing".to_string(),
+        opened_date: String::new(),
+        closed_date: String::new(),
+        next_deadline: String::new(),
+        next_hearing_date: String::new(),
+        order_ids: Vec::new(),
+        evidence_ids: Vec::new(),
+        event_ids: Vec::new(),
+        document_ids: Vec::new(),
+        notes: String::new(),
+        created_at: now.clone(),
+        updated_at: now,
+    }
+}
+
+#[tauri::command]
+fn save_case_matter(db: State<DbConn>, item: CaseMatterItem) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO case_matters (
+            id, parent_case_id, case_type, title, case_number, court_name, judge_name, status,
+            lifecycle_stage, opened_date, closed_date, next_deadline, next_hearing_date,
+            order_ids_json, evidence_ids_json, event_ids_json, document_ids_json, notes,
+            created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        rusqlite::params![
+            item.id,
+            item.parent_case_id,
+            item.case_type,
+            item.title,
+            item.case_number,
+            item.court_name,
+            item.judge_name,
+            item.status,
+            item.lifecycle_stage,
+            item.opened_date,
+            item.closed_date,
+            item.next_deadline,
+            item.next_hearing_date,
+            serde_json::to_string(&item.order_ids).map_err(|e| e.to_string())?,
+            serde_json::to_string(&item.evidence_ids).map_err(|e| e.to_string())?,
+            serde_json::to_string(&item.event_ids).map_err(|e| e.to_string())?,
+            serde_json::to_string(&item.document_ids).map_err(|e| e.to_string())?,
+            item.notes,
+            item.created_at,
+            item.updated_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_case_matter(db: State<DbConn>, id: String) -> Result<(), String> {
+    if id == "primary" {
+        return Err("The primary case cannot be deleted.".to_string());
+    }
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM case_matters WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn save_case_alert(db: State<DbConn>, item: CaseAlertItem) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO case_alerts (id, case_id, alert_type, severity, title, details, due_date, resolved, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![item.id, item.case_id, item.alert_type, item.severity, item.title, item.details, item.due_date, if item.resolved { 1 } else { 0 }, item.created_at],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn resolve_case_alert(db: State<DbConn>, id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE case_alerts SET resolved = 1 WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_case_overview_data(db: State<DbConn>) -> Result<CaseOverviewDataResult, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, parent_case_id, case_type, title, case_number, court_name, judge_name, status,
+                lifecycle_stage, opened_date, closed_date, next_deadline, next_hearing_date,
+                order_ids_json, evidence_ids_json, event_ids_json, document_ids_json, notes, created_at, updated_at
+             FROM case_matters ORDER BY CASE WHEN id = 'primary' THEN 0 ELSE 1 END, updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(CaseMatterItem {
+                id: row.get(0)?, parent_case_id: row.get(1)?, case_type: row.get(2)?, title: row.get(3)?, case_number: row.get(4)?, court_name: row.get(5)?, judge_name: row.get(6)?, status: row.get(7)?, lifecycle_stage: row.get(8)?, opened_date: row.get(9)?, closed_date: row.get(10)?, next_deadline: row.get(11)?, next_hearing_date: row.get(12)?, order_ids: serde_json::from_str(&row.get::<_, String>(13)?).unwrap_or_default(), evidence_ids: serde_json::from_str(&row.get::<_, String>(14)?).unwrap_or_default(), event_ids: serde_json::from_str(&row.get::<_, String>(15)?).unwrap_or_default(), document_ids: serde_json::from_str(&row.get::<_, String>(16)?).unwrap_or_default(), notes: row.get(17)?, created_at: row.get(18)?, updated_at: row.get(19)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    let matters = rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    let primary_case = matters.iter().find(|item| item.id == "primary").cloned().unwrap_or_else(default_primary_case_item);
+    let related_cases = matters.into_iter().filter(|item| item.id != "primary").collect();
+
+    let mut alert_stmt = conn
+        .prepare("SELECT id, case_id, alert_type, severity, title, details, due_date, resolved, created_at FROM case_alerts WHERE resolved = 0 ORDER BY due_date ASC, created_at DESC")
+        .map_err(|e| e.to_string())?;
+    let alert_rows = alert_stmt
+        .query_map([], |row| Ok(CaseAlertItem { id: row.get(0)?, case_id: row.get(1)?, alert_type: row.get(2)?, severity: row.get(3)?, title: row.get(4)?, details: row.get(5)?, due_date: row.get(6)?, resolved: row.get::<_, i64>(7)? != 0, created_at: row.get(8)? }))
+        .map_err(|e| e.to_string())?;
+    let alerts = alert_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+    let active_order_count = table_count(&conn, "court_orders")?;
+    let upcoming_deadline_count = conn.query_row("SELECT COUNT(*) FROM case_matters WHERE next_deadline <> '' OR next_hearing_date <> ''", [], |row| row.get::<_, i64>(0)).map_err(|e| e.to_string())? as usize;
+    let cross_case_evidence_count = conn.query_row("SELECT COUNT(*) FROM evidence", [], |row| row.get::<_, i64>(0)).map_err(|e| e.to_string())? as usize;
+    Ok(CaseOverviewDataResult { primary_case, related_cases, alerts, active_order_count, upcoming_deadline_count, cross_case_evidence_count })
 }
 
 #[tauri::command]
@@ -1722,11 +2345,12 @@ fn table_count(conn: &rusqlite::Connection, table_name: &str) -> Result<usize, S
 
 #[tauri::command]
 fn get_app_diagnostics(
-    app_handle: tauri::AppHandle,
+    _app_handle: tauri::AppHandle,
     db: State<DbConn>,
+    vault: State<VaultRoot>,
 ) -> Result<String, String> {
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
-    let db_path = app_dir.join("proof_of_presence.db");
+    let app_dir = vault.0.clone();
+    let db_path = vault_database_path(&vault.0);
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let last_export = app_dir
         .join("exports")
@@ -1744,8 +2368,12 @@ fn get_app_diagnostics(
 }
 
 #[tauri::command]
-fn clear_runtime_cache(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+fn clear_runtime_cache(
+    app_handle: tauri::AppHandle,
+    vault: State<VaultRoot>,
+) -> Result<String, String> {
+    let _ = app_handle;
+    let app_dir = vault.0.clone();
     for folder in ["runtime_cache", "derived_state_cache", "temp_exports"] {
         let path = app_dir.join(folder);
         if path.exists() {
@@ -1778,14 +2406,18 @@ fn rebuild_all_documents(db: State<DbConn>) -> Result<String, String> {
 fn export_full_case_bundle(
     app_handle: tauri::AppHandle,
     db: State<DbConn>,
+    vault: State<VaultRoot>,
     case_id: String,
 ) -> Result<String, String> {
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    let _ = app_handle;
+    let app_dir = vault.0.clone();
     let timestamp = chrono::Utc::now().to_rfc3339();
     let safe_timestamp = timestamp.replace(':', "-");
-    let bundle_dir = app_dir
-        .join("case_bundles")
-        .join(format!("{}-{}", sanitize_file_name(&case_id), safe_timestamp));
+    let bundle_dir = app_dir.join("case_bundles").join(format!(
+        "{}-{}",
+        sanitize_file_name(&case_id),
+        safe_timestamp
+    ));
     fs::create_dir_all(&bundle_dir).map_err(|e| e.to_string())?;
 
     let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -1855,16 +2487,232 @@ fn write_json_file(path: &std::path::Path, content: &str) -> Result<(), String> 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    fs::write(path, content).map_err(|e| e.to_string())
+    let temp_path = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .map_err(|e| e.to_string())?;
+        use std::io::Write;
+        file.write_all(content.as_bytes())
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+    }
+    match fs::rename(&temp_path, path) {
+        Ok(()) => Ok(()),
+        Err(rename_error) if path.exists() => {
+            fs::remove_file(path).map_err(|e| e.to_string())?;
+            fs::rename(&temp_path, path).map_err(|_| rename_error.to_string())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_player_dossier_vault_snapshot(
+    vault_root: &Path,
+    item: &PlayerDossierItem,
+    action: &str,
+    actor_source: &str,
+    previous_record_hash: Option<&str>,
+    payload_hash: &str,
+    ledger_entry_hash: &str,
+    timestamp_utc: &str,
+) -> Result<String, String> {
+    let contact_dir = vault_data_dir(vault_root, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(&item.id));
+    for dir in [
+        contact_dir.join("history"),
+        contact_dir.join("documents"),
+        contact_dir.join("notes"),
+        contact_dir.join("research"),
+    ] {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let current_path = contact_dir.join("current.json");
+    let snapshot_path = contact_dir.join("history").join(format!(
+        "{}-{}-{}.json",
+        timestamp_utc.replace(':', "-"),
+        action.to_ascii_lowercase(),
+        payload_hash.chars().take(12).collect::<String>()
+    ));
+
+    let snapshot = serde_json::json!({
+        "dossier_uuid": item.id,
+        "action": action,
+        "timestamp_utc": timestamp_utc,
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": payload_hash,
+        "snapshot_path": snapshot_path.to_string_lossy(),
+        "audit_chain_entry_hash": ledger_entry_hash,
+        "dossier": item,
+    });
+    let content = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    write_json_file(&current_path, &content)?;
+    write_json_file(&snapshot_path, &content)?;
+
+    Ok(snapshot_path.to_string_lossy().to_string())
+}
+
+fn write_player_dossier_delete_snapshot(
+    vault_root: &Path,
+    id: &str,
+    actor_source: &str,
+    previous_record_hash: Option<&str>,
+    payload_hash: &str,
+    ledger_entry_hash: &str,
+    timestamp_utc: &str,
+) -> Result<String, String> {
+    let contact_dir = vault_data_dir(vault_root, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(id));
+    for dir in [
+        contact_dir.join("history"),
+        contact_dir.join("documents"),
+        contact_dir.join("notes"),
+        contact_dir.join("research"),
+    ] {
+        fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let snapshot_path = contact_dir.join("history").join(format!(
+        "{}-player_dossier_deleted-{}.json",
+        timestamp_utc.replace(':', "-"),
+        payload_hash.chars().take(12).collect::<String>()
+    ));
+    let snapshot = serde_json::json!({
+        "dossier_uuid": id,
+        "action": "PLAYER_DOSSIER_DELETED",
+        "timestamp_utc": timestamp_utc,
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": payload_hash,
+        "snapshot_path": snapshot_path.to_string_lossy(),
+        "audit_chain_entry_hash": ledger_entry_hash,
+        "tombstone": true,
+    });
+    let content = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    write_json_file(&contact_dir.join("current.json"), &content)?;
+    write_json_file(&snapshot_path, &content)?;
+    Ok(snapshot_path.to_string_lossy().to_string())
+}
+
+fn write_browser_record_vault_snapshot(
+    vault_root: &Path,
+    record_type: &str,
+    record_id: &str,
+    action: &str,
+    actor_source: &str,
+    payload: &str,
+    previous_record_hash: Option<&str>,
+    payload_hash: &str,
+    ledger_entry_hash: &str,
+    timestamp_utc: &str,
+) -> Result<String, String> {
+    let record_dir = if record_type == "child_support_payment_ledger" {
+        vault_data_dir(vault_root, "child_support_ledger").join(sanitize_file_name(record_id))
+    } else if let Some(kind) = record_type.strip_prefix("operational_record:") {
+        vault_data_dir(vault_root, "operational_records")
+            .join(sanitize_file_name(kind))
+            .join(sanitize_file_name(record_id))
+    } else {
+        vault_data_dir(vault_root, "browser_records")
+            .join(sanitize_file_name(record_type))
+            .join(sanitize_file_name(record_id))
+    };
+    let history_dir = record_dir.join("history");
+    fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
+    let snapshot_path = history_dir.join(format!(
+        "{}-{}-{}.json",
+        timestamp_utc.replace(':', "-"),
+        action.to_ascii_lowercase(),
+        payload_hash.chars().take(12).collect::<String>()
+    ));
+    let snapshot = serde_json::json!({
+        "action": action,
+        "record_type": record_type,
+        "record_id": record_id,
+        "timestamp_utc": timestamp_utc,
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": payload_hash,
+        "snapshot_path": snapshot_path.to_string_lossy(),
+        "audit_chain_entry_hash": ledger_entry_hash,
+        "payload": serde_json::from_str::<serde_json::Value>(payload)
+            .unwrap_or_else(|_| serde_json::Value::String(payload.to_string())),
+    });
+    let content = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    if !action.ends_with("_DELETED")
+        || record_type == "child_support_payment_ledger"
+        || record_type.starts_with("operational_record:")
+    {
+        write_json_file(&record_dir.join("current.json"), &content)?;
+    }
+    write_json_file(&snapshot_path, &content)?;
+    Ok(record_dir.to_string_lossy().to_string())
+}
+
+fn write_contact_research_vault_snapshot(
+    vault_root: &Path,
+    finding: &ContactResearchFinding,
+    action: &str,
+    actor_source: &str,
+    previous_record_hash: Option<&str>,
+    payload_hash: &str,
+    ledger_entry_hash: &str,
+    timestamp_utc: &str,
+) -> Result<String, String> {
+    let research_dir = vault_data_dir(vault_root, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(&finding.contact_id))
+        .join("research")
+        .join(sanitize_file_name(&finding.id));
+    let history_dir = research_dir.join("history");
+    fs::create_dir_all(&history_dir).map_err(|e| e.to_string())?;
+    let snapshot_path = history_dir.join(format!(
+        "{}-{}-{}.json",
+        timestamp_utc.replace(':', "-"),
+        action.to_ascii_lowercase(),
+        payload_hash.chars().take(12).collect::<String>()
+    ));
+    let snapshot = serde_json::json!({
+        "dossier_uuid": finding.contact_id,
+        "research_finding_uuid": finding.id,
+        "action": action,
+        "timestamp_utc": timestamp_utc,
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": payload_hash,
+        "snapshot_path": snapshot_path.to_string_lossy(),
+        "audit_chain_entry_hash": ledger_entry_hash,
+        "research_finding": finding,
+    });
+    let content = serde_json::to_string_pretty(&snapshot).map_err(|e| e.to_string())?;
+    write_json_file(&research_dir.join("current.json"), &content)?;
+    write_json_file(&snapshot_path, &content)?;
+    Ok(snapshot_path.to_string_lossy().to_string())
+}
+
+fn current_record_hash(current_path: &Path) -> Result<Option<String>, String> {
+    if !current_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(current_path).map_err(|e| e.to_string())?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(parsed
+        .get("new_record_hash")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string()))
 }
 
 #[tauri::command]
 fn save_court_order(db: State<DbConn>, item: CourtOrderItem) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO court_orders (id, title, order_date, effective_date, judge_name, court_name, docket_number, terms, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![item.id, item.title, item.order_date, item.effective_date, item.judge_name, item.court_name, item.docket_number, item.terms, item.created_at],
+        "INSERT OR REPLACE INTO court_orders (id, case_id, title, order_date, effective_date, judge_name, court_name, docket_number, terms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        rusqlite::params![item.id, item.case_id, item.title, item.order_date, item.effective_date, item.judge_name, item.court_name, item.docket_number, item.terms, item.created_at],
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1872,20 +2720,21 @@ fn save_court_order(db: State<DbConn>, item: CourtOrderItem) -> Result<(), Strin
 #[tauri::command]
 fn get_court_orders(db: State<DbConn>) -> Result<Vec<CourtOrderItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, title, order_date, effective_date, judge_name, court_name, docket_number, terms, created_at FROM court_orders ORDER BY created_at DESC")
+    let mut stmt = conn.prepare("SELECT id, case_id, title, order_date, effective_date, judge_name, court_name, docket_number, terms, created_at FROM court_orders ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             Ok(CourtOrderItem {
                 id: row.get(0)?,
-                title: row.get(1)?,
-                order_date: row.get(2)?,
-                effective_date: row.get(3)?,
-                judge_name: row.get(4)?,
-                court_name: row.get(5)?,
-                docket_number: row.get(6)?,
-                terms: row.get(7)?,
-                created_at: row.get(8)?,
+                case_id: row.get(1)?,
+                title: row.get(2)?,
+                order_date: row.get(3)?,
+                effective_date: row.get(4)?,
+                judge_name: row.get(5)?,
+                court_name: row.get(6)?,
+                docket_number: row.get(7)?,
+                terms: row.get(8)?,
+                created_at: row.get(9)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1905,9 +2754,9 @@ fn delete_court_order(db: State<DbConn>, id: String) -> Result<(), String> {
 fn save_violation(db: State<DbConn>, item: ViolationItem) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO violations (id, order_id, date, description, evidence_ids, severity, status, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        rusqlite::params![item.id, item.order_id, item.date, item.description, item.evidence_ids.join(","), item.severity, item.status, item.created_at],
+        "INSERT OR REPLACE INTO violations (id, case_id, order_id, date, description, evidence_ids, severity, status, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![item.id, item.case_id, item.order_id, item.date, item.description, item.evidence_ids.join(","), item.severity, item.status, item.created_at],
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1915,24 +2764,25 @@ fn save_violation(db: State<DbConn>, item: ViolationItem) -> Result<(), String> 
 #[tauri::command]
 fn get_violations(db: State<DbConn>) -> Result<Vec<ViolationItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, order_id, date, description, evidence_ids, severity, status, created_at FROM violations ORDER BY created_at DESC")
+    let mut stmt = conn.prepare("SELECT id, case_id, order_id, date, description, evidence_ids, severity, status, created_at FROM violations ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let ids_raw: String = row.get(4)?;
+            let ids_raw: String = row.get(5)?;
             Ok(ViolationItem {
                 id: row.get(0)?,
-                order_id: row.get(1)?,
-                date: row.get(2)?,
-                description: row.get(3)?,
+                case_id: row.get(1)?,
+                order_id: row.get(2)?,
+                date: row.get(3)?,
+                description: row.get(4)?,
                 evidence_ids: ids_raw
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect(),
-                severity: row.get(5)?,
-                status: row.get(6)?,
-                created_at: row.get(7)?,
+                severity: row.get(6)?,
+                status: row.get(7)?,
+                created_at: row.get(8)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1952,9 +2802,9 @@ fn delete_violation(db: State<DbConn>, id: String) -> Result<(), String> {
 fn save_event(db: State<DbConn>, item: EventItem) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO events (id, type, title, date, description, related_evidence_ids, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![item.id, item.ev_type, item.title, item.date, item.description, item.related_evidence_ids.join(","), item.created_at],
+        "INSERT OR REPLACE INTO events (id, case_id, type, title, date, description, related_evidence_ids, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        rusqlite::params![item.id, item.case_id, item.ev_type, item.title, item.date, item.description, item.related_evidence_ids.join(","), item.created_at],
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -1962,23 +2812,24 @@ fn save_event(db: State<DbConn>, item: EventItem) -> Result<(), String> {
 #[tauri::command]
 fn get_events(db: State<DbConn>) -> Result<Vec<EventItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn.prepare("SELECT id, type, title, date, description, related_evidence_ids, created_at FROM events ORDER BY created_at DESC")
+    let mut stmt = conn.prepare("SELECT id, case_id, type, title, date, description, related_evidence_ids, created_at FROM events ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let ids_raw: String = row.get(5)?;
+            let ids_raw: String = row.get(6)?;
             Ok(EventItem {
                 id: row.get(0)?,
-                ev_type: row.get(1)?,
-                title: row.get(2)?,
-                date: row.get(3)?,
-                description: row.get(4)?,
+                case_id: row.get(1)?,
+                ev_type: row.get(2)?,
+                title: row.get(3)?,
+                date: row.get(4)?,
+                description: row.get(5)?,
                 related_evidence_ids: ids_raw
                     .split(',')
                     .map(|s| s.trim().to_string())
                     .filter(|s| !s.is_empty())
                     .collect(),
-                created_at: row.get(6)?,
+                created_at: row.get(7)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -1995,6 +2846,424 @@ fn delete_event(db: State<DbConn>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn save_child_support_payment(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    item: ChildSupportPaymentItem,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT OR REPLACE INTO child_support_payments (
+            id, monthly_amount_due, due_date, amount_paid, payment_date, payment_method,
+            state_case_number, confirmation_number, support_category, source_status,
+            official_balance, arrears_balance, receipt_file_name, receipt_file_size,
+            receipt_sha256, agency_statement_name, agency_statement_sha256,
+            correction_note, dispute_note, missed_payment_claim, certified_record,
+            created_at, updated_at
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12,
+            ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23
+         )",
+        rusqlite::params![
+            &item.id,
+            &item.monthly_amount_due,
+            &item.due_date,
+            &item.amount_paid,
+            &item.payment_date,
+            &item.payment_method,
+            &item.state_case_number,
+            &item.confirmation_number,
+            &item.support_category,
+            &item.source_status,
+            &item.official_balance,
+            &item.arrears_balance,
+            &item.receipt_file_name,
+            item.receipt_file_size,
+            &item.receipt_sha256,
+            &item.agency_statement_name,
+            &item.agency_statement_sha256,
+            &item.correction_note,
+            &item.dispute_note,
+            &item.missed_payment_claim,
+            item.certified_record,
+            &item.created_at,
+            &item.updated_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let payload = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        "child_support_payment_ledger",
+        &item.id,
+        &payload,
+        "CHILD_SUPPORT_PAYMENT_SAVED",
+    )
+}
+
+#[tauri::command]
+fn get_child_support_payments(db: State<DbConn>) -> Result<Vec<ChildSupportPaymentItem>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT
+            id, monthly_amount_due, due_date, amount_paid, payment_date, payment_method,
+            state_case_number, confirmation_number, support_category, source_status,
+            official_balance, arrears_balance, receipt_file_name, receipt_file_size,
+            receipt_sha256, agency_statement_name, agency_statement_sha256,
+            correction_note, dispute_note, missed_payment_claim, certified_record,
+            created_at, updated_at
+         FROM child_support_payments
+         ORDER BY due_date DESC, updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(ChildSupportPaymentItem {
+                id: row.get(0)?,
+                monthly_amount_due: row.get(1)?,
+                due_date: row.get(2)?,
+                amount_paid: row.get(3)?,
+                payment_date: row.get(4)?,
+                payment_method: row.get(5)?,
+                state_case_number: row.get(6)?,
+                confirmation_number: row.get(7)?,
+                support_category: row.get(8)?,
+                source_status: row.get(9)?,
+                official_balance: row.get(10)?,
+                arrears_balance: row.get(11)?,
+                receipt_file_name: row.get(12)?,
+                receipt_file_size: row.get(13)?,
+                receipt_sha256: row.get(14)?,
+                agency_statement_name: row.get(15)?,
+                agency_statement_sha256: row.get(16)?,
+                correction_note: row.get(17)?,
+                dispute_note: row.get(18)?,
+                missed_payment_claim: row.get(19)?,
+                certified_record: row.get(20)?,
+                created_at: row.get(21)?,
+                updated_at: row.get(22)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_child_support_payment(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    id: String,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let existing = conn
+        .query_row(
+            "SELECT
+                id, monthly_amount_due, due_date, amount_paid, payment_date, payment_method,
+                state_case_number, confirmation_number, support_category, source_status,
+                official_balance, arrears_balance, receipt_file_name, receipt_file_size,
+                receipt_sha256, agency_statement_name, agency_statement_sha256,
+                correction_note, dispute_note, missed_payment_claim, certified_record,
+                created_at, updated_at
+             FROM child_support_payments
+             WHERE id = ?1",
+            [&id],
+            |row| {
+                Ok(ChildSupportPaymentItem {
+                    id: row.get(0)?,
+                    monthly_amount_due: row.get(1)?,
+                    due_date: row.get(2)?,
+                    amount_paid: row.get(3)?,
+                    payment_date: row.get(4)?,
+                    payment_method: row.get(5)?,
+                    state_case_number: row.get(6)?,
+                    confirmation_number: row.get(7)?,
+                    support_category: row.get(8)?,
+                    source_status: row.get(9)?,
+                    official_balance: row.get(10)?,
+                    arrears_balance: row.get(11)?,
+                    receipt_file_name: row.get(12)?,
+                    receipt_file_size: row.get(13)?,
+                    receipt_sha256: row.get(14)?,
+                    agency_statement_name: row.get(15)?,
+                    agency_statement_sha256: row.get(16)?,
+                    correction_note: row.get(17)?,
+                    dispute_note: row.get(18)?,
+                    missed_payment_claim: row.get(19)?,
+                    certified_record: row.get(20)?,
+                    created_at: row.get(21)?,
+                    updated_at: row.get(22)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM child_support_payments WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+
+    let payload = serde_json::json!({
+        "id": id,
+        "deletedAt": chrono::Utc::now().to_rfc3339(),
+        "previous": existing,
+        "tombstone": true,
+    })
+    .to_string();
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        "child_support_payment_ledger",
+        &id,
+        &payload,
+        "CHILD_SUPPORT_PAYMENT_DELETED",
+    )
+}
+
+fn operational_vault_path(vault_root: &Path, record_type: &str, id: &str) -> String {
+    vault_data_dir(vault_root, "operational_records")
+        .join(sanitize_file_name(record_type))
+        .join(sanitize_file_name(id))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn row_to_operational_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<OperationalRecordItem> {
+    let linked_raw: String = row.get(9)?;
+    let payload_raw: String = row.get(10)?;
+    Ok(OperationalRecordItem {
+        id: row.get(0)?,
+        glyph_trace_id: row.get(1)?,
+        record_type: row.get(2)?,
+        case_id: row.get(3)?,
+        title: row.get(4)?,
+        status: row.get(5)?,
+        verification_state: row.get(6)?,
+        source_provenance: row.get(7)?,
+        date: row.get(8)?,
+        linked_record_ids: serde_json::from_str(&linked_raw).unwrap_or_default(),
+        payload: serde_json::from_str(&payload_raw).unwrap_or_else(|_| serde_json::json!({})),
+        vault_path: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        archived: row.get::<_, bool>(14)?,
+    })
+}
+
+#[tauri::command]
+fn save_operational_record(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    mut item: OperationalRecordItem,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    if item.glyph_trace_id.trim().is_empty() {
+        item.glyph_trace_id = format!("glyph:{}:{}", item.record_type, item.id);
+    }
+    if item.case_id.trim().is_empty() {
+        item.case_id = "default".to_string();
+    }
+    if item.verification_state.trim().is_empty() {
+        item.verification_state = "Needs Document".to_string();
+    }
+    if item.status.trim().is_empty() {
+        item.status = "Open".to_string();
+    }
+    if item.source_provenance.trim().is_empty() {
+        item.source_provenance = "User entered".to_string();
+    }
+    item.vault_path = operational_vault_path(&vault.0, &item.record_type, &item.id);
+    let now = chrono::Utc::now().to_rfc3339();
+    if item.created_at.trim().is_empty() {
+        item.created_at = now.clone();
+    }
+    item.updated_at = now;
+    let linked_json = serde_json::to_string(&item.linked_record_ids).map_err(|e| e.to_string())?;
+    let payload_json = serde_json::to_string(&item.payload).map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT OR REPLACE INTO operational_records (
+            id, glyph_trace_id, record_type, case_id, title, status, verification_state,
+            source_provenance, date, linked_record_ids_json, payload_json, vault_path,
+            created_at, updated_at, archived
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        rusqlite::params![
+            &item.id,
+            &item.glyph_trace_id,
+            &item.record_type,
+            &item.case_id,
+            &item.title,
+            &item.status,
+            &item.verification_state,
+            &item.source_provenance,
+            &item.date,
+            &linked_json,
+            &payload_json,
+            &item.vault_path,
+            &item.created_at,
+            &item.updated_at,
+            item.archived,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    let audit_payload = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        &format!("operational_record:{}", item.record_type),
+        &item.id,
+        &audit_payload,
+        "OPERATIONAL_RECORD_SAVED",
+    )
+}
+
+#[tauri::command]
+fn get_operational_records(
+    db: State<DbConn>,
+    record_type: Option<String>,
+) -> Result<Vec<OperationalRecordItem>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let base = "SELECT id, glyph_trace_id, record_type, case_id, title, status, verification_state,
+            source_provenance, date, linked_record_ids_json, payload_json, vault_path,
+            created_at, updated_at, archived
+         FROM operational_records";
+    let sql = if record_type
+        .as_ref()
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        format!("{base} WHERE record_type = ?1 ORDER BY updated_at DESC")
+    } else {
+        format!("{base} ORDER BY updated_at DESC")
+    };
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = if let Some(kind) = record_type.filter(|value| !value.trim().is_empty()) {
+        stmt.query_map([kind], row_to_operational_record)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+    } else {
+        stmt.query_map([], row_to_operational_record)
+            .map_err(|e| e.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+    };
+    rows.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_operational_record(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    id: String,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let existing = conn
+        .query_row(
+            "SELECT id, glyph_trace_id, record_type, case_id, title, status, verification_state,
+                source_provenance, date, linked_record_ids_json, payload_json, vault_path,
+                created_at, updated_at, archived
+             FROM operational_records
+             WHERE id = ?1",
+            [&id],
+            row_to_operational_record,
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let record_type = existing
+        .as_ref()
+        .map(|item| item.record_type.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    conn.execute("DELETE FROM operational_records WHERE id = ?1", [&id])
+        .map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({
+        "id": id,
+        "deletedAt": chrono::Utc::now().to_rfc3339(),
+        "previous": existing,
+        "tombstone": true,
+    })
+    .to_string();
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        &format!("operational_record:{record_type}"),
+        &id,
+        &payload,
+        "OPERATIONAL_RECORD_DELETED",
+    )
+}
+
+#[tauri::command]
+fn get_glyph_trace_records(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+) -> Result<Vec<GlyphTraceSummaryItem>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut records = Vec::new();
+
+    let mut op_stmt = conn
+        .prepare(
+            "SELECT id, glyph_trace_id, record_type, case_id, title, status, verification_state,
+                source_provenance, date, linked_record_ids_json, payload_json, vault_path,
+                created_at, updated_at, archived
+             FROM operational_records
+             ORDER BY updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let op_rows = op_stmt
+        .query_map([], row_to_operational_record)
+        .map_err(|e| e.to_string())?;
+    for item in op_rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?
+    {
+        records.push(GlyphTraceSummaryItem {
+            record_id: item.id,
+            glyph_trace_id: item.glyph_trace_id,
+            record_type: item.record_type,
+            case_id: item.case_id,
+            title: item.title,
+            status: item.status,
+            verification_state: item.verification_state,
+            updated_at: item.updated_at,
+            vault_path: item.vault_path,
+            linked_record_ids: item.linked_record_ids,
+        });
+    }
+
+    let mut evidence_stmt = conn
+        .prepare("SELECT id, title, created_at FROM evidence ORDER BY created_at DESC")
+        .map_err(|e| e.to_string())?;
+    let evidence_rows = evidence_stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            Ok(GlyphTraceSummaryItem {
+                record_id: id.clone(),
+                glyph_trace_id: format!("glyph:evidence:{id}"),
+                record_type: "evidence".to_string(),
+                case_id: "default".to_string(),
+                title: row.get(1)?,
+                status: "Vault Protected".to_string(),
+                verification_state: "Vault Protected".to_string(),
+                updated_at: row.get(2)?,
+                vault_path: vault_data_dir(&vault.0, "evidence_originals")
+                    .join(sanitize_file_name(&id))
+                    .to_string_lossy()
+                    .to_string(),
+                linked_record_ids: Vec::new(),
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    records.extend(
+        evidence_rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| e.to_string())?,
+    );
+
+    records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Ok(records)
+}
+
+#[tauri::command]
 fn create_incident(db: State<DbConn>, input: IncidentInput) -> Result<IncidentItem, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -2007,16 +3276,17 @@ fn create_incident(db: State<DbConn>, input: IncidentInput) -> Result<IncidentIt
 
     conn.execute(
         "INSERT INTO incidents (
-            id, type, title, date, location, description,
+            id, case_id, type, title, date, location, description,
             denied_visit_scheduled_start, denied_visit_scheduled_end,
             denied_visit_arrival_time, denied_visit_exchange_location,
             denied_visit_who_denied, denied_visit_child_present,
             denied_visit_reason_given, denied_visit_attempted_contact,
             linked_evidence_ids, linked_communication_ids, timeline_event_id,
             court_safe_summary, trust_glyph_risk, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)",
         rusqlite::params![
             &id,
+            &input.case_id,
             &input.incident_type,
             &input.title,
             &input.date,
@@ -2041,10 +3311,11 @@ fn create_incident(db: State<DbConn>, input: IncidentInput) -> Result<IncidentIt
     .map_err(|e| e.to_string())?;
 
     conn.execute(
-        "INSERT INTO events (id, type, title, date, description, related_evidence_ids, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO events (id, case_id, type, title, date, description, related_evidence_ids, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         rusqlite::params![
             &timeline_event_id,
+            &input.case_id,
             if input.incident_type == "denied_visit" {
                 "visit"
             } else {
@@ -2061,6 +3332,7 @@ fn create_incident(db: State<DbConn>, input: IncidentInput) -> Result<IncidentIt
 
     Ok(IncidentItem {
         id,
+        case_id: input.case_id,
         incident_type: input.incident_type,
         title: input.title,
         date: input.date,
@@ -2096,7 +3368,7 @@ fn get_incidents(db: State<DbConn>) -> Result<Vec<IncidentItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, type, title, date, location, description,
+            "SELECT id, case_id, type, title, date, location, description,
                 denied_visit_scheduled_start, denied_visit_scheduled_end,
                 denied_visit_arrival_time, denied_visit_exchange_location,
                 denied_visit_who_denied, denied_visit_child_present,
@@ -2109,23 +3381,24 @@ fn get_incidents(db: State<DbConn>) -> Result<Vec<IncidentItem>, String> {
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let evidence_raw: String = row.get(14)?;
-            let communication_raw: String = row.get(15)?;
+            let evidence_raw: String = row.get(15)?;
+            let communication_raw: String = row.get(16)?;
             Ok(IncidentItem {
                 id: row.get(0)?,
-                incident_type: row.get(1)?,
-                title: row.get(2)?,
-                date: row.get(3)?,
-                location: row.get(4)?,
-                description: row.get(5)?,
-                denied_visit_scheduled_start: row.get(6)?,
-                denied_visit_scheduled_end: row.get(7)?,
-                denied_visit_arrival_time: row.get(8)?,
-                denied_visit_exchange_location: row.get(9)?,
-                denied_visit_who_denied: row.get(10)?,
-                denied_visit_child_present: row.get(11)?,
-                denied_visit_reason_given: row.get(12)?,
-                denied_visit_attempted_contact: row.get(13)?,
+                case_id: row.get(1)?,
+                incident_type: row.get(2)?,
+                title: row.get(3)?,
+                date: row.get(4)?,
+                location: row.get(5)?,
+                description: row.get(6)?,
+                denied_visit_scheduled_start: row.get(7)?,
+                denied_visit_scheduled_end: row.get(8)?,
+                denied_visit_arrival_time: row.get(9)?,
+                denied_visit_exchange_location: row.get(10)?,
+                denied_visit_who_denied: row.get(11)?,
+                denied_visit_child_present: row.get(12)?,
+                denied_visit_reason_given: row.get(13)?,
+                denied_visit_attempted_contact: row.get(14)?,
                 linked_evidence_ids: evidence_raw
                     .split(',')
                     .filter(|value| !value.is_empty())
@@ -2136,10 +3409,10 @@ fn get_incidents(db: State<DbConn>) -> Result<Vec<IncidentItem>, String> {
                     .filter(|value| !value.is_empty())
                     .map(|value| value.to_string())
                     .collect(),
-                timeline_event_id: row.get(16)?,
-                court_safe_summary: row.get(17)?,
-                trust_glyph_risk: row.get(18)?,
-                created_at: row.get(19)?,
+                timeline_event_id: row.get(17)?,
+                court_safe_summary: row.get(18)?,
+                trust_glyph_risk: row.get(19)?,
+                created_at: row.get(20)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2156,50 +3429,122 @@ fn delete_incident(db: State<DbConn>, id: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-fn save_player_dossier(db: State<DbConn>, item: PlayerDossierItem) -> Result<(), String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
+fn save_player_dossier_record(
+    conn: &rusqlite::Connection,
+    vault_root: &Path,
+    item: PlayerDossierItem,
+) -> Result<(), String> {
     let interaction_history_json =
         serde_json::to_string(&item.interaction_history).map_err(|e| e.to_string())?;
+    let profile_json = serde_json::to_string(&item.profile).map_err(|e| e.to_string())?;
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
+    let payload_json = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+    let payload_hash = sha256_hex(payload_json.as_bytes());
+    let audit_ledger_id = uuid::Uuid::new_v4().to_string();
+    let previous_ledger_hash = get_previous_ledger_hash(&conn)?;
+    let contact_dir = vault_data_dir(vault_root, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(&item.id));
+    let previous_record_hash = current_record_hash(&contact_dir.join("current.json"))?;
+    let snapshot_path = contact_dir
+        .join("history")
+        .join(format!(
+            "{}-player_dossier_saved-{}.json",
+            timestamp_utc.replace(':', "-"),
+            payload_hash.chars().take(12).collect::<String>()
+        ))
+        .to_string_lossy()
+        .to_string();
+    let actor_source = "local_operator";
+    let metadata_json = serde_json::json!({
+        "record_id": &item.id,
+        "action": "PLAYER_DOSSIER_SAVED",
+        "record_type": "player_dossier",
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": &payload_hash,
+        "snapshot_path": snapshot_path,
+    })
+    .to_string();
+    let ledger_hash = ledger_entry_hash(
+        &item.id,
+        "PLAYER_DOSSIER_SAVED",
+        &payload_hash,
+        &timestamp_utc,
+        &metadata_json,
+        previous_ledger_hash.as_deref(),
+    );
+    write_player_dossier_vault_snapshot(
+        vault_root,
+        &item,
+        "PLAYER_DOSSIER_SAVED",
+        actor_source,
+        previous_record_hash.as_deref(),
+        &payload_hash,
+        &ledger_hash,
+        &timestamp_utc,
+    )?;
 
     conn.execute(
         "INSERT OR REPLACE INTO players_dossier (
-            id, name, role, known_role, organization, phone_numbers, emails, address,
+            id, category, name, role, known_role, organization, phone_numbers, emails, address,
             relationship_to_case, status, last_contact, follow_up_needed, conflict_concern,
             documents_requested, documents_provided, linked_evidence, linked_incidents,
             linked_timeline_events, private_field_notes, court_safe_notes,
-            interaction_history_json, created_at, updated_at
+            profile_json, interaction_history_json, case_ids_json, created_at, updated_at
         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8,
-            ?9, ?10, ?11, ?12, ?13,
-            ?14, ?15, ?16, ?17,
-            ?18, ?19, ?20,
-            ?21, ?22, ?23
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+            ?10, ?11, ?12, ?13, ?14,
+            ?15, ?16, ?17, ?18,
+            ?19, ?20, ?21, ?22,
+            ?23, ?24, ?25, ?26
         )",
         rusqlite::params![
-            item.id,
-            item.name,
-            item.role,
-            item.known_role,
-            item.organization,
-            item.phone_numbers,
-            item.emails,
-            item.address,
-            item.relationship_to_case,
-            item.status,
-            item.last_contact,
+            &item.id,
+            &item.category,
+            &item.name,
+            &item.role,
+            &item.known_role,
+            &item.organization,
+            &item.phone_numbers,
+            &item.emails,
+            &item.address,
+            &item.relationship_to_case,
+            &item.status,
+            &item.last_contact,
             if item.follow_up_needed { 1 } else { 0 },
             if item.conflict_concern { 1 } else { 0 },
-            item.documents_requested,
-            item.documents_provided,
-            item.linked_evidence,
-            item.linked_incidents,
-            item.linked_timeline_events,
-            item.private_field_notes,
-            item.court_safe_notes,
+            &item.documents_requested,
+            &item.documents_provided,
+            &item.linked_evidence,
+            &item.linked_incidents,
+            &item.linked_timeline_events,
+            &item.private_field_notes,
+            &item.court_safe_notes,
+            profile_json,
             interaction_history_json,
-            item.created_at,
-            item.updated_at,
+            serde_json::to_string(&item.case_ids).map_err(|e| e.to_string())?,
+            &item.created_at,
+            &item.updated_at,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    conn.execute(
+        "INSERT INTO audit_ledger (
+            id, record_id, action, payload_hash, hash, created_at, metadata_json,
+            previous_ledger_hash, ledger_entry_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            &audit_ledger_id,
+            &item.id,
+            "PLAYER_DOSSIER_SAVED",
+            &payload_hash,
+            &payload_hash,
+            &timestamp_utc,
+            &metadata_json,
+            &previous_ledger_hash,
+            &ledger_hash,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -2208,16 +3553,26 @@ fn save_player_dossier(db: State<DbConn>, item: PlayerDossierItem) -> Result<(),
 }
 
 #[tauri::command]
+fn save_player_dossier(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    item: PlayerDossierItem,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    save_player_dossier_record(&conn, &vault.0, item)
+}
+
+#[tauri::command]
 fn get_players_dossier(db: State<DbConn>) -> Result<Vec<PlayerDossierItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
             "SELECT
-                id, name, role, known_role, organization, phone_numbers, emails, address,
+                id, category, name, role, known_role, organization, phone_numbers, emails, address,
                 relationship_to_case, status, last_contact, follow_up_needed, conflict_concern,
                 documents_requested, documents_provided, linked_evidence, linked_incidents,
                 linked_timeline_events, private_field_notes, court_safe_notes,
-                interaction_history_json, created_at, updated_at
+                profile_json, interaction_history_json, case_ids_json, created_at, updated_at
              FROM players_dossier
              ORDER BY updated_at DESC",
         )
@@ -2225,34 +3580,42 @@ fn get_players_dossier(db: State<DbConn>) -> Result<Vec<PlayerDossierItem>, Stri
 
     let rows = stmt
         .query_map([], |row| {
-            let interaction_history_json: String = row.get(20)?;
+            let profile_json: String = row.get(21)?;
+            let profile: PlayerDossierProfile = serde_json::from_str(&profile_json).unwrap_or_default();
+            let interaction_history_json: String = row.get(22)?;
             let interaction_history: Vec<PlayerInteractionLog> =
                 serde_json::from_str(&interaction_history_json).unwrap_or_default();
+            let case_ids_json: String = row.get(23)?;
+            let case_ids: Vec<String> = serde_json::from_str(&case_ids_json)
+                .unwrap_or_else(|_| vec!["primary".to_string()]);
 
             Ok(PlayerDossierItem {
                 id: row.get(0)?,
-                name: row.get(1)?,
-                role: row.get(2)?,
-                known_role: row.get(3)?,
-                organization: row.get(4)?,
-                phone_numbers: row.get(5)?,
-                emails: row.get(6)?,
-                address: row.get(7)?,
-                relationship_to_case: row.get(8)?,
-                status: row.get(9)?,
-                last_contact: row.get(10)?,
-                follow_up_needed: row.get::<_, i64>(11)? != 0,
-                conflict_concern: row.get::<_, i64>(12)? != 0,
-                documents_requested: row.get(13)?,
-                documents_provided: row.get(14)?,
-                linked_evidence: row.get(15)?,
-                linked_incidents: row.get(16)?,
-                linked_timeline_events: row.get(17)?,
-                private_field_notes: row.get(18)?,
-                court_safe_notes: row.get(19)?,
+                case_ids,
+                category: row.get(1)?,
+                name: row.get(2)?,
+                role: row.get(3)?,
+                known_role: row.get(4)?,
+                organization: row.get(5)?,
+                phone_numbers: row.get(6)?,
+                emails: row.get(7)?,
+                address: row.get(8)?,
+                relationship_to_case: row.get(9)?,
+                status: row.get(10)?,
+                last_contact: row.get(11)?,
+                follow_up_needed: row.get::<_, i64>(12)? != 0,
+                conflict_concern: row.get::<_, i64>(13)? != 0,
+                documents_requested: row.get(14)?,
+                documents_provided: row.get(15)?,
+                linked_evidence: row.get(16)?,
+                linked_incidents: row.get(17)?,
+                linked_timeline_events: row.get(18)?,
+                private_field_notes: row.get(19)?,
+                court_safe_notes: row.get(20)?,
+                profile,
                 interaction_history,
-                created_at: row.get(21)?,
-                updated_at: row.get(22)?,
+                created_at: row.get(24)?,
+                updated_at: row.get(25)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2261,17 +3624,228 @@ fn get_players_dossier(db: State<DbConn>) -> Result<Vec<PlayerDossierItem>, Stri
         .map_err(|e| e.to_string())
 }
 
-#[tauri::command]
-fn delete_player_dossier(db: State<DbConn>, id: String) -> Result<(), String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
+fn delete_player_dossier_record(
+    conn: &rusqlite::Connection,
+    vault_root: &Path,
+    id: String,
+) -> Result<(), String> {
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
+    let payload_json = serde_json::json!({
+        "id": &id,
+        "action": "PLAYER_DOSSIER_DELETED",
+        "timestamp_utc": &timestamp_utc,
+    })
+    .to_string();
+    let payload_hash = sha256_hex(payload_json.as_bytes());
+    let audit_ledger_id = uuid::Uuid::new_v4().to_string();
+    let previous_ledger_hash = get_previous_ledger_hash(&conn)?;
+    let contact_dir = vault_data_dir(vault_root, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(&id));
+    let previous_record_hash = current_record_hash(&contact_dir.join("current.json"))?;
+    let snapshot_path = contact_dir
+        .join("history")
+        .join(format!(
+            "{}-player_dossier_deleted-{}.json",
+            timestamp_utc.replace(':', "-"),
+            payload_hash.chars().take(12).collect::<String>()
+        ))
+        .to_string_lossy()
+        .to_string();
+    let actor_source = "local_operator";
+    let metadata_json = serde_json::json!({
+        "record_id": &id,
+        "action": "PLAYER_DOSSIER_DELETED",
+        "record_type": "player_dossier",
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": &payload_hash,
+        "snapshot_path": snapshot_path,
+    })
+    .to_string();
+    let ledger_hash = ledger_entry_hash(
+        &id,
+        "PLAYER_DOSSIER_DELETED",
+        &payload_hash,
+        &timestamp_utc,
+        &metadata_json,
+        previous_ledger_hash.as_deref(),
+    );
+    write_player_dossier_delete_snapshot(
+        vault_root,
+        &id,
+        actor_source,
+        previous_record_hash.as_deref(),
+        &payload_hash,
+        &ledger_hash,
+        &timestamp_utc,
+    )?;
+
     conn.execute("DELETE FROM players_dossier WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+    conn.execute(
+        "INSERT INTO audit_ledger (
+            id, record_id, action, payload_hash, hash, created_at, metadata_json,
+            previous_ledger_hash, ledger_entry_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            &audit_ledger_id,
+            &id,
+            "PLAYER_DOSSIER_DELETED",
+            &payload_hash,
+            &payload_hash,
+            &timestamp_utc,
+            &metadata_json,
+            &previous_ledger_hash,
+            &ledger_hash,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[tauri::command]
+fn delete_player_dossier(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    id: String,
+) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    delete_player_dossier_record(&conn, &vault.0, id)
+}
+
+fn audit_browser_record(
+    conn: &rusqlite::Connection,
+    vault_root: &Path,
+    record_type: &str,
+    record_id: &str,
+    payload: &str,
+    action: &str,
+) -> Result<String, String> {
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
+    let payload_hash = sha256_hex(payload.as_bytes());
+    let audit_ledger_id = uuid::Uuid::new_v4().to_string();
+    let previous_ledger_hash = get_previous_ledger_hash(conn)?;
+    let record_dir_path = vault_data_dir(vault_root, "browser_records")
+        .join(sanitize_file_name(record_type))
+        .join(sanitize_file_name(record_id));
+    let previous_record_hash = current_record_hash(&record_dir_path.join("current.json"))?;
+    let snapshot_path = record_dir_path
+        .join("history")
+        .join(format!(
+            "{}-{}-{}.json",
+            timestamp_utc.replace(':', "-"),
+            action.to_ascii_lowercase(),
+            payload_hash.chars().take(12).collect::<String>()
+        ))
+        .to_string_lossy()
+        .to_string();
+    let actor_source = "browser_ui";
+    let metadata_json = serde_json::json!({
+        "record_id": record_id,
+        "action": action,
+        "record_type": record_type,
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": &payload_hash,
+        "snapshot_path": snapshot_path,
+    })
+    .to_string();
+    let ledger_hash = ledger_entry_hash(
+        record_id,
+        action,
+        &payload_hash,
+        &timestamp_utc,
+        &metadata_json,
+        previous_ledger_hash.as_deref(),
+    );
+    let snapshot_dir = write_browser_record_vault_snapshot(
+        vault_root,
+        record_type,
+        record_id,
+        action,
+        actor_source,
+        payload,
+        previous_record_hash.as_deref(),
+        &payload_hash,
+        &ledger_hash,
+        &timestamp_utc,
+    )?;
+
+    conn.execute(
+        "INSERT INTO audit_ledger (
+            id, record_id, action, payload_hash, hash, created_at, metadata_json,
+            previous_ledger_hash, ledger_entry_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        rusqlite::params![
+            &audit_ledger_id,
+            record_id,
+            action,
+            &payload_hash,
+            &payload_hash,
+            &timestamp_utc,
+            &metadata_json,
+            &previous_ledger_hash,
+            &ledger_hash,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    Ok(serde_json::json!({
+        "success": true,
+        "record_type": record_type,
+        "record_id": record_id,
+        "action": action,
+        "payload_hash": payload_hash,
+        "ledger_entry_hash": ledger_hash,
+        "record_dir": snapshot_dir,
+        "timestamp_utc": timestamp_utc,
+    })
+    .to_string())
+}
+
+#[tauri::command]
+fn save_vault_record(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    record_type: String,
+    record_id: String,
+    payload: String,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        &record_type,
+        &record_id,
+        &payload,
+        "BROWSER_RECORD_SAVED",
+    )
+}
+
+#[tauri::command]
+fn delete_vault_record(
+    db: State<DbConn>,
+    vault: State<VaultRoot>,
+    record_type: String,
+    record_id: String,
+    payload: String,
+) -> Result<String, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        &record_type,
+        &record_id,
+        &payload,
+        "BROWSER_RECORD_DELETED",
+    )
 }
 
 #[tauri::command]
 fn save_contact_research_finding(
     db: State<DbConn>,
+    vault: State<VaultRoot>,
     mut finding: ContactResearchFinding,
 ) -> Result<ContactResearchReceipt, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
@@ -2285,12 +3859,31 @@ fn save_contact_research_finding(
     let receipt_hash = sha256_hex(payload_json.as_bytes());
     let audit_ledger_id = uuid::Uuid::new_v4().to_string();
     let previous_ledger_hash = get_previous_ledger_hash(&conn)?;
+    let research_dir = vault_data_dir(&vault.0, "dossiers")
+        .join("contacts")
+        .join(sanitize_file_name(&finding.contact_id))
+        .join("research")
+        .join(sanitize_file_name(&finding.id));
+    let previous_record_hash = current_record_hash(&research_dir.join("current.json"))?;
+    let snapshot_path = research_dir
+        .join("history")
+        .join(format!(
+            "{}-contact_research_finding_saved-{}.json",
+            timestamp_utc.replace(':', "-"),
+            receipt_hash.chars().take(12).collect::<String>()
+        ))
+        .to_string_lossy()
+        .to_string();
+    let actor_source = "local_operator";
     let metadata_json = serde_json::json!({
         "record_id": &finding.id,
-        "contact_id": &finding.contact_id,
+        "dossier_uuid": &finding.contact_id,
         "action": "CONTACT_RESEARCH_FINDING_SAVED",
-        "status": &finding.status,
-        "provider_or_source": &finding.provider_or_source,
+        "record_type": "contact_research_finding",
+        "actor_source": actor_source,
+        "previous_record_hash": previous_record_hash,
+        "new_record_hash": &receipt_hash,
+        "snapshot_path": snapshot_path,
     })
     .to_string();
     let ledger_hash = ledger_entry_hash(
@@ -2304,6 +3897,16 @@ fn save_contact_research_finding(
 
     finding.audit_ledger_id = Some(audit_ledger_id.clone());
     finding.receipt_hash = Some(receipt_hash.clone());
+    write_contact_research_vault_snapshot(
+        &vault.0,
+        &finding,
+        "CONTACT_RESEARCH_FINDING_SAVED",
+        actor_source,
+        previous_record_hash.as_deref(),
+        &receipt_hash,
+        &ledger_hash,
+        &timestamp_utc,
+    )?;
 
     conn.execute(
         "INSERT OR REPLACE INTO contact_research_findings (
@@ -2464,20 +4067,30 @@ fn get_profile(db: State<DbConn>) -> Result<Option<CaseProfile>, String> {
 }
 
 #[tauri::command]
-fn save_report(db: State<DbConn>, item: ReportItem) -> Result<(), String> {
+fn save_report(db: State<DbConn>, vault: State<VaultRoot>, item: ReportItem) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute(
-        "INSERT OR REPLACE INTO reports (id, title, type, content, generated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT OR REPLACE INTO reports (id, case_id, title, type, content, generated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
-            item.id,
-            item.title,
-            item.report_type,
-            item.content,
-            item.generated_at
+            &item.id,
+            &item.case_id,
+            &item.title,
+            &item.report_type,
+            &item.content,
+            &item.generated_at
         ],
     )
     .map_err(|e| e.to_string())?;
+    let payload = serde_json::to_string(&item).map_err(|e| e.to_string())?;
+    audit_browser_record(
+        &conn,
+        &vault.0,
+        "report",
+        &item.id,
+        &payload,
+        "REPORT_SAVED",
+    )?;
     Ok(())
 }
 
@@ -2486,17 +4099,18 @@ fn get_reports(db: State<DbConn>) -> Result<Vec<ReportItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     let mut stmt = conn
         .prepare(
-            "SELECT id, title, type, content, generated_at FROM reports ORDER BY generated_at DESC",
+            "SELECT id, case_id, title, type, content, generated_at FROM reports ORDER BY generated_at DESC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
             Ok(ReportItem {
                 id: row.get(0)?,
-                title: row.get(1)?,
-                report_type: row.get(2)?,
-                content: row.get(3)?,
-                generated_at: row.get(4)?,
+                case_id: row.get(1)?,
+                title: row.get(2)?,
+                report_type: row.get(3)?,
+                content: row.get(4)?,
+                generated_at: row.get(5)?,
             })
         })
         .map_err(|e| e.to_string())?;
@@ -2505,10 +4119,17 @@ fn get_reports(db: State<DbConn>) -> Result<Vec<ReportItem>, String> {
 }
 
 #[tauri::command]
-fn delete_report(db: State<DbConn>, id: String) -> Result<(), String> {
+fn delete_report(db: State<DbConn>, vault: State<VaultRoot>, id: String) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM reports WHERE id = ?1", [&id])
         .map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({
+        "id": id,
+        "deleted": true,
+        "deleted_at": chrono::Utc::now().to_rfc3339(),
+    })
+    .to_string();
+    audit_browser_record(&conn, &vault.0, "report", &id, &payload, "REPORT_DELETED")?;
     Ok(())
 }
 
@@ -2749,13 +4370,15 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
 #[tauri::command]
 fn import_evidence_file(
     app_handle: tauri::AppHandle,
+    vault: State<VaultRoot>,
     evidence_id: String,
     file_name: String,
     file_type: String,
     original_modified_at: Option<String>,
     bytes: Vec<u8>,
 ) -> Result<ImportedEvidenceFile, String> {
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    let _ = app_handle;
+    let app_dir = vault.0.clone();
     let evidence_dir = app_dir.join("evidence_originals").join(&evidence_id);
     fs::create_dir_all(&evidence_dir).map_err(|e| e.to_string())?;
 
@@ -2861,6 +4484,7 @@ fn verify_evidence_integrity(
 fn import_communication_export(
     app_handle: tauri::AppHandle,
     db: State<DbConn>,
+    vault: State<VaultRoot>,
     title: String,
     file_name: String,
     file_type: String,
@@ -2874,7 +4498,8 @@ fn import_communication_export(
     let extension = file_extension(&file_name);
     let original_hash = sha256_hex(&bytes);
 
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
+    let _ = app_handle;
+    let app_dir = vault.0.clone();
     let export_dir = app_dir
         .join("communication_exports")
         .join(&communication_id);
@@ -3056,10 +4681,317 @@ fn export_database(db_path: String, destination: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn get_db_path(app_handle: tauri::AppHandle) -> Result<String, String> {
-    let app_dir = app_data_dir(&app_handle.config()).ok_or("No app dir")?;
-    let db_path = app_dir.join("proof_of_presence.db");
+fn get_db_path(app_handle: tauri::AppHandle, vault: State<VaultRoot>) -> Result<String, String> {
+    let _ = app_handle;
+    let db_path = vault_database_path(&vault.0);
     Ok(db_path.to_string_lossy().to_string())
+}
+
+fn assistant_context_terms(prompt: &str) -> Vec<String> {
+    let stop = [
+        "what",
+        "when",
+        "where",
+        "with",
+        "from",
+        "that",
+        "this",
+        "there",
+        "their",
+        "about",
+        "please",
+        "show",
+        "tell",
+        "summarize",
+        "case",
+        "record",
+        "records",
+    ];
+    prompt
+        .split(|ch: char| !ch.is_alphanumeric())
+        .map(|term| term.to_lowercase())
+        .filter(|term| term.len() > 3 && !stop.contains(&term.as_str()))
+        .take(8)
+        .collect()
+}
+
+fn assistant_context_matches(line: &str, terms: &[String], allow_recent: bool) -> bool {
+    if terms.is_empty() {
+        return allow_recent;
+    }
+    let lower = line.to_lowercase();
+    terms.iter().any(|term| lower.contains(term))
+}
+
+fn build_assistant_vault_context(
+    conn: &rusqlite::Connection,
+    vault_root: &Path,
+    prompt: &str,
+    active_page: &str,
+) -> Result<(String, usize, usize), String> {
+    let terms = assistant_context_terms(prompt);
+    let broad_case_request = {
+        let lower = prompt.to_lowercase();
+        lower.contains("summarize")
+            || lower.contains("my case")
+            || lower.contains("my record")
+            || lower.contains("what happened")
+    };
+    let mut lines: Vec<String> = vec![format!(
+        "vault_root={} | active_page={}",
+        vault_root.to_string_lossy(),
+        active_page
+    )];
+
+    let mut record_count = 0usize;
+    let mut glyph_count = 0usize;
+
+    let mut push_line = |line: String, has_glyph: bool| {
+        if assistant_context_matches(&line, &terms, broad_case_request) && record_count < 18 {
+            if has_glyph {
+                glyph_count += 1;
+            }
+            record_count += 1;
+            lines.push(line);
+        }
+    };
+
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, glyph_trace_id, record_type, case_id, title, status,
+                verification_state, updated_at, vault_path
+         FROM operational_records
+         WHERE archived = 0
+         ORDER BY updated_at DESC
+         LIMIT 25",
+    ) {
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(format!(
+                    "source=operational_records | record_id={} | glyph={} | type={} | case_id={} | title={} | status={} | verification={} | updated={} | vault_path={}",
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            push_line(row.map_err(|e| e.to_string())?, true);
+        }
+    }
+
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, title, type, date, sha256, file_path
+         FROM evidence
+         ORDER BY created_at DESC
+         LIMIT 20",
+    ) {
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                Ok(format!(
+                    "source=evidence | record_id={} | glyph=glyph:evidence:{} | title={} | type={} | date={} | sha256={} | vault_path={}",
+                    id,
+                    id,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?.unwrap_or_default(),
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            push_line(row.map_err(|e| e.to_string())?, true);
+        }
+    }
+
+    if let Ok(mut stmt) = conn.prepare(
+        "SELECT id, due_date, amount_paid, payment_date, support_category,
+                source_status, receipt_sha256, agency_statement_sha256, updated_at
+         FROM child_support_payments
+         ORDER BY updated_at DESC
+         LIMIT 20",
+    ) {
+        let rows = stmt
+            .query_map([], |row| {
+                let id: String = row.get(0)?;
+                Ok(format!(
+                    "source=child_support_payments | record_id={} | glyph=glyph:child_support_payment_ledger:{} | due_date={} | amount_paid={} | payment_date={} | category={} | source_status={} | receipt_sha256={} | agency_statement_sha256={} | vault_path={}",
+                    id,
+                    id,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    vault_data_dir(vault_root, "child_support_ledger").join(&id).to_string_lossy(),
+                ))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            push_line(row.map_err(|e| e.to_string())?, true);
+        }
+    }
+
+    Ok((
+        if record_count == 0 {
+            String::new()
+        } else {
+            lines.join("\n")
+        },
+        record_count,
+        glyph_count,
+    ))
+}
+
+#[tauri::command]
+async fn local_agent_chat(
+    input: LocalAgentChatInput,
+    db: State<'_, DbConn>,
+    vault: State<'_, VaultRoot>,
+) -> Result<LocalAgentChatResult, String> {
+    let (vault_context, vault_record_count, glyph_record_count) = {
+        let conn = db.0.lock().map_err(|e| e.to_string())?;
+        build_assistant_vault_context(&conn, &vault.0, &input.prompt, &input.active_page)?
+    };
+
+    local_agent_chat_with_context(input, vault_context, vault_record_count, glyph_record_count)
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_dossier(id: &str, status: &str) -> PlayerDossierItem {
+        PlayerDossierItem {
+            id: id.to_string(),
+            case_ids: vec!["primary".to_string()],
+            category: "witness".to_string(),
+            name: "Temporary Test Contact".to_string(),
+            role: "witness".to_string(),
+            known_role: "Test-only contact".to_string(),
+            organization: "".to_string(),
+            phone_numbers: "555-0100".to_string(),
+            emails: "temp@example.invalid".to_string(),
+            address: "123 Test St".to_string(),
+            relationship_to_case: "temporary validation".to_string(),
+            status: status.to_string(),
+            last_contact: "2026-08-09".to_string(),
+            follow_up_needed: false,
+            conflict_concern: false,
+            documents_requested: "".to_string(),
+            documents_provided: "".to_string(),
+            linked_evidence: "".to_string(),
+            linked_incidents: "".to_string(),
+            linked_timeline_events: "".to_string(),
+            private_field_notes: "temporary private note".to_string(),
+            court_safe_notes: "temporary court safe note".to_string(),
+            profile: PlayerDossierProfile::default(),
+            interaction_history: vec![],
+            created_at: "2026-08-09T00:00:00Z".to_string(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    fn assert_audit_chain(conn: &rusqlite::Connection) {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, record_id, action, COALESCE(payload_hash, hash), created_at,
+                    metadata_json, previous_ledger_hash, ledger_entry_hash
+                 FROM audit_ledger
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                ))
+            })
+            .unwrap();
+
+        let mut previous: Option<String> = None;
+        let mut count = 0usize;
+        for row in rows {
+            let (
+                id,
+                record_id,
+                action,
+                payload_hash,
+                created_at,
+                metadata_json,
+                previous_hash,
+                ledger_hash,
+            ) = row.unwrap();
+            assert_eq!(previous_hash, previous, "bad previous hash at {id}");
+            let expected = ledger_entry_hash(
+                &record_id,
+                &action,
+                &payload_hash,
+                &created_at,
+                &metadata_json,
+                previous.as_deref(),
+            );
+            assert_eq!(ledger_hash.as_deref(), Some(expected.as_str()));
+            previous = Some(expected);
+            count += 1;
+        }
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn dossier_create_update_delete_writes_snapshots_and_chain() {
+        let temp_root =
+            std::env::temp_dir().join(format!("pops-vault-dossier-test-{}", uuid::Uuid::new_v4()));
+        let db_path = temp_root.join("database").join("proof_of_presence.db");
+        ensure_vault_system_layout(&temp_root).unwrap();
+        let conn = init_db(db_path.to_str().unwrap());
+        let dossier_id = uuid::Uuid::new_v4().to_string();
+
+        save_player_dossier_record(&conn, &temp_root, test_dossier(&dossier_id, "active")).unwrap();
+        save_player_dossier_record(&conn, &temp_root, test_dossier(&dossier_id, "watch")).unwrap();
+        delete_player_dossier_record(&conn, &temp_root, dossier_id.clone()).unwrap();
+
+        let dossier_dir = temp_root
+            .join("dossiers")
+            .join("contacts")
+            .join(&dossier_id);
+        assert!(dossier_dir.join("current.json").exists());
+        assert!(dossier_dir.join("documents").is_dir());
+        assert!(dossier_dir.join("notes").is_dir());
+        assert!(dossier_dir.join("research").is_dir());
+        let history_count = fs::read_dir(dossier_dir.join("history")).unwrap().count();
+        assert_eq!(history_count, 3);
+
+        let remaining: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM players_dossier WHERE id = ?1",
+                [&dossier_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(remaining, 0);
+        assert_audit_chain(&conn);
+        drop(conn);
+        fs::remove_dir_all(&temp_root).unwrap();
+        assert!(!temp_root.exists());
+    }
 }
 
 // ─── Main ─────────────────────────────────────────────────────────
@@ -3067,11 +4999,13 @@ fn get_db_path(app_handle: tauri::AppHandle) -> Result<String, String> {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let app_dir = app_data_dir(&app.config()).expect("app dir");
-            fs::create_dir_all(&app_dir).expect("create app dir");
-            let db_path = app_dir.join("proof_of_presence.db");
+            let vault_root = runtime_vault_system_dir(&app.config()).expect("resolve vault root");
+            ensure_vault_system_layout(&vault_root).expect("create vault system layout");
+            migrate_legacy_app_data(&app.config(), &vault_root).expect("migrate legacy app data");
+            let db_path = vault_database_path(&vault_root);
             let conn = init_db(db_path.to_str().unwrap());
             app.manage(DbConn(std::sync::Mutex::new(conn)));
+            app.manage(VaultRoot(vault_root));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -3085,6 +5019,11 @@ fn main() {
             export_attorney_packet,
             get_case_summary,
             get_case_overview,
+            get_case_overview_data,
+            save_case_matter,
+            delete_case_matter,
+            save_case_alert,
+            resolve_case_alert,
             rebuild_derived_state,
             run_full_integrity_check,
             get_app_diagnostics,
@@ -3103,6 +5042,13 @@ fn main() {
             save_event,
             get_events,
             delete_event,
+            save_child_support_payment,
+            get_child_support_payments,
+            delete_child_support_payment,
+            save_operational_record,
+            get_operational_records,
+            delete_operational_record,
+            get_glyph_trace_records,
             create_incident,
             get_incidents,
             delete_incident,
@@ -3126,6 +5072,8 @@ fn main() {
             compute_file_hash,
             export_database,
             get_db_path,
+            save_vault_record,
+            delete_vault_record,
             mcp_research_tool,
             local_agent_status,
             local_agent_chat,
