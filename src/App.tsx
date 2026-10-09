@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import "./styles/pops-assistant.css";
 import "./styles/pops-assistant-fit.css";
 import "./styles/pops-assistant-controls.css";
@@ -34,6 +34,12 @@ import type { DossierCategory, Page } from "./types";
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const { toasts, show } = useToast();
+
+  useEffect(() => {
+    const openDiagnostics = () => setPage("diagnostics");
+    window.addEventListener("pops:open-diagnostics", openDiagnostics);
+    return () => window.removeEventListener("pops:open-diagnostics", openDiagnostics);
+  }, []);
 
   (window as any).__showToast = show;
 

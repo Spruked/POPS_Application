@@ -65,6 +65,19 @@
   box-shadow: 0 0 26px rgba(72, 148, 255, 0.58), inset 0 0 14px rgba(255, 255, 255, 0.38);
 }
 
+.pops-presence-orb {
+  width: 92px;
+  height: 92px;
+  display: block;
+  flex: 0 0 auto;
+  border: 2px solid rgba(134, 207, 255, 0.92);
+  border-radius: 50%;
+  object-fit: cover;
+  object-position: 50% 45%;
+  box-shadow: 0 0 30px rgba(72, 148, 255, 0.72), 0 5px 12px rgba(0, 0, 0, 0.35);
+  user-select: none;
+}
+
 .pops-private-status {
   display: flex;
   align-items: flex-start;

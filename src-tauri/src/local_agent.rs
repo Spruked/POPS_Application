@@ -75,6 +75,16 @@ pub struct LocalAgentStatus {
     pub services: Vec<LocalServiceStatus>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct LocalAgentReadiness {
+    pub ready: bool,
+    pub llama_endpoint: String,
+    pub llama_status: String,
+    pub model: Option<String>,
+    pub tpc_endpoint: String,
+    pub tpc_status: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct TpcChatResponse {
     available: bool,
@@ -197,6 +207,47 @@ pub async fn local_agent_status() -> Result<LocalAgentStatus, String> {
         substrate_available: Path::new(&substrate_root).exists(),
         substrate_root,
         services,
+    })
+}
+
+#[tauri::command]
+pub async fn local_agent_readiness() -> Result<LocalAgentReadiness, String> {
+    let llamacpp = env_or_default("POPS_LLAMACPP_URL", DEFAULT_LLAMACPP_URL);
+    let tpc = env_or_default("POPS_TPC_URL", DEFAULT_TPC_URL);
+    let llama_endpoint = format!("{}/v1/models", llamacpp.trim_end_matches('/'));
+    let tpc_endpoint = format!("{}/health", tpc.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()
+        .map_err(|error| error.to_string())?;
+
+    let (llama_status, model) = match client.get(&llama_endpoint).send().await {
+        Ok(response) if response.status().is_success() => {
+            let model = response
+                .json::<serde_json::Value>()
+                .await
+                .ok()
+                .and_then(|body| body.get("models").and_then(|models| models.as_array()).cloned())
+                .and_then(|models| models.first().cloned())
+                .and_then(|entry| entry.get("model").or_else(|| entry.get("name")).and_then(|v| v.as_str()).map(String::from));
+            ("online".to_string(), model)
+        }
+        Ok(response) => (format!("http_{}", response.status().as_u16()), None),
+        Err(error) => (format!("offline: {error}"), None),
+    };
+    let tpc_status = match client.get(&tpc_endpoint).send().await {
+        Ok(response) if response.status().is_success() => "online".to_string(),
+        Ok(response) => format!("http_{}", response.status().as_u16()),
+        Err(error) => format!("offline: {error}"),
+    };
+
+    Ok(LocalAgentReadiness {
+        ready: llama_status == "online" && tpc_status == "online",
+        llama_endpoint,
+        llama_status,
+        model,
+        tpc_endpoint,
+        tpc_status,
     })
 }
 

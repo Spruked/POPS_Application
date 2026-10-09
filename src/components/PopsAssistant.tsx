@@ -49,6 +49,12 @@ type LocalAgentChatResult = {
   available: boolean;
 };
 
+type LocalAgentReadiness = {
+  ready: boolean;
+  llama_status: string;
+  tpc_status: string;
+};
+
 const PAGE_LABELS: Partial<Record<Page, string>> = {
   dashboard: "Dashboard",
   contacts: "Contacts",
@@ -123,7 +129,23 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
   const [morbStatus, setMorbStatus] = useState<MorbStatus>("idle");
   const [isThinking, setIsThinking] = useState(false);
+  const [guardian, setGuardian] = useState<"starting" | "ready" | "unavailable">("starting");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+
+  async function refreshGuardian() {
+    try {
+      const result = await invoke<LocalAgentReadiness>("local_agent_readiness");
+      setGuardian(result.ready ? "ready" : "unavailable");
+    } catch {
+      setGuardian("unavailable");
+    }
+  }
+
+  useEffect(() => {
+    void refreshGuardian();
+    const timer = window.setInterval(() => void refreshGuardian(), 3000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" });
@@ -200,13 +222,28 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
           <div className="pops-header-actions">
             <button className="pops-header-button" type="button" onClick={() => setDockState("minimized")} title="Minimize chat assistant to the bottom corner" aria-label="Minimize chat assistant to the bottom corner"><Minimize2 size={17} /></button>
             <button className="pops-header-button" type="button" onClick={() => setDockState("closed")} title="Close chat assistant" aria-label="Close chat assistant"><X size={17} /></button>
-            <div className="pops-presence-mark" aria-hidden="true"><span>P</span></div>
+            <img
+              className="pops-presence-orb"
+              src="/orb/skins/average_dadblkleatherjacket.png"
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
           </div>
         </header>
 
         <section className="pops-private-status">
           <ShieldCheck size={16} aria-hidden="true" />
           <div><strong>Private workspace</strong><span>Chat guidance is routed through guided mode or the local TPC pipeline.</span></div>
+        </section>
+
+        <section className="pops-private-status" aria-label="Guardian status">
+          <Sparkles size={16} aria-hidden="true" />
+          <div>
+            <strong>Guardian {guardian}</strong>
+            <span>{guardian === "ready" ? "Assistant services are available." : guardian === "starting" ? "Assistant initialization continues in the background." : "Records and case tools remain available."}</span>
+          </div>
+          {guardian === "unavailable" && <div className="pops-header-actions"><button className="pops-header-button" type="button" onClick={() => void refreshGuardian()}>Retry</button><button className="pops-header-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("pops:open-diagnostics"))}>Diagnostics</button></div>}
         </section>
 
         <section className="pops-private-status" aria-label="Research status">

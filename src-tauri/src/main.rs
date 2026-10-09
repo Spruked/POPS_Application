@@ -5,7 +5,7 @@ mod local_agent;
 mod research_server;
 
 use local_agent::{
-    local_agent_chat_with_context, local_agent_ocr, local_agent_speak, local_agent_status,
+    local_agent_chat_with_context, local_agent_ocr, local_agent_readiness, local_agent_speak, local_agent_status,
     LocalAgentChatInput, LocalAgentChatResult,
 };
 use research_server::mcp_research_tool;
@@ -5076,6 +5076,7 @@ fn main() {
             delete_vault_record,
             mcp_research_tool,
             local_agent_status,
+            local_agent_readiness,
             local_agent_chat,
             local_agent_speak,
             local_agent_ocr
