@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { GitBranch, Link2, RefreshCcw, ShieldCheck } from 'lucide-react';
 import { formatDateTime } from '../utils/helpers';
 import type { GlyphTraceSummary } from '../types';

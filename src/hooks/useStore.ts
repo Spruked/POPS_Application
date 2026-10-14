@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import type { Evidence, CourtOrder, Violation, Event, CaseProfile, Report, PlayerDossierRecord, ContactResearchFinding, ContactResearchReceipt } from '../types';
 
 const PLAYER_DOSSIER_STORAGE_KEY = 'pops_player_dossiers_v2';

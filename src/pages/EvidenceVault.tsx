@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { ClipboardList, Eye, FileCheck2, FileText, Shield, Plus, Trash2, Hash, Tag, Search } from 'lucide-react';
 import { useEvidenceStore } from '../hooks/useStore';
 import { useToast } from '../hooks/useToast';

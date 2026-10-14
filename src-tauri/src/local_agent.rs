@@ -100,6 +100,47 @@ struct TpcChatResponse {
     glyph_record_count: Option<usize>,
 }
 
+/// What this build of POPS can do on the current device. Desktop keeps the full
+/// local ORB service mesh; Android/iOS keep every SQLite/evidence workflow but the
+/// 127.0.0.1 AI services, WSL OCR and Windows TTS only exist on the workstation.
+#[derive(Debug, Serialize)]
+pub struct PlatformCapabilities {
+    pub platform: String,
+    pub mobile: bool,
+    pub sqlite_vault: bool,
+    pub evidence_import: bool,
+    pub evidence_hashing: bool,
+    pub reports_export: bool,
+    pub guided_assistant: bool,
+    pub local_ai: bool,
+    pub ocr: bool,
+    pub voice_output: bool,
+    pub dictation_service: bool,
+    pub research_substrate: bool,
+}
+
+const MOBILE_UNAVAILABLE: &str =
+    "This ORB service runs on the POPS desktop workstation and is not available on mobile.";
+
+#[tauri::command]
+pub fn platform_capabilities() -> PlatformCapabilities {
+    let mobile = cfg!(mobile);
+    PlatformCapabilities {
+        platform: std::env::consts::OS.to_string(),
+        mobile,
+        sqlite_vault: true,
+        evidence_import: true,
+        evidence_hashing: true,
+        reports_export: true,
+        guided_assistant: true,
+        local_ai: !mobile,
+        ocr: !mobile,
+        voice_output: !mobile,
+        dictation_service: !mobile,
+        research_substrate: !mobile,
+    }
+}
+
 fn env_or_default(name: &str, default: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| default.to_string())
 }
@@ -176,6 +217,19 @@ pub async fn local_agent_status() -> Result<LocalAgentStatus, String> {
         .await,
     ];
 
+    if cfg!(mobile) {
+        services.push(LocalServiceStatus {
+            name: "wsl-tesseract".to_string(),
+            status: "desktop_only".to_string(),
+            detail: MOBILE_UNAVAILABLE.to_string(),
+        });
+        return Ok(LocalAgentStatus {
+            substrate_available: false,
+            substrate_root,
+            services,
+        });
+    }
+
     let tesseract = Command::new("wsl")
         .args([
             "sh",
@@ -216,6 +270,16 @@ pub async fn local_agent_readiness() -> Result<LocalAgentReadiness, String> {
     let tpc = env_or_default("POPS_TPC_URL", DEFAULT_TPC_URL);
     let llama_endpoint = format!("{}/v1/models", llamacpp.trim_end_matches('/'));
     let tpc_endpoint = format!("{}/health", tpc.trim_end_matches('/'));
+    if cfg!(mobile) {
+        return Ok(LocalAgentReadiness {
+            ready: false,
+            llama_endpoint,
+            llama_status: "desktop_only".to_string(),
+            model: None,
+            tpc_endpoint,
+            tpc_status: "desktop_only".to_string(),
+        });
+    }
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(3))
         .build()
@@ -257,6 +321,9 @@ pub async fn local_agent_chat_with_context(
     vault_record_count: usize,
     glyph_record_count: usize,
 ) -> Result<LocalAgentChatResult, String> {
+    if cfg!(mobile) {
+        return Err(MOBILE_UNAVAILABLE.to_string());
+    }
     let prompt = input.prompt.trim();
     if prompt.is_empty() {
         return Err("Prompt is required.".to_string());
@@ -342,6 +409,9 @@ pub async fn local_agent_chat_with_context(
 pub async fn local_agent_speak(
     input: LocalAgentSpeakInput,
 ) -> Result<LocalAgentSpeakResult, String> {
+    if cfg!(mobile) {
+        return Err(MOBILE_UNAVAILABLE.to_string());
+    }
     let text = input.text.trim();
     if text.is_empty() {
         return Err("Speech text is required.".to_string());
@@ -405,6 +475,9 @@ pub async fn local_agent_speak(
 
 #[tauri::command]
 pub fn local_agent_ocr(input: LocalAgentOcrInput) -> Result<LocalAgentOcrResult, String> {
+    if cfg!(mobile) {
+        return Err(MOBILE_UNAVAILABLE.to_string());
+    }
     let image_path = input.image_path.trim();
     if image_path.is_empty() {
         return Err("Image path is required.".to_string());

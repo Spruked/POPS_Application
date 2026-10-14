@@ -1,0 +1,232 @@
+/* POPS phone layout (Tauri Android/iOS and narrow windows).
+   Reuses the existing design tokens from index.css; desktop (>760px) is unchanged
+   apart from the 761–920px assistant rule at the bottom. */
+
+.mobile-topbar,
+.mobile-tabbar,
+.mobile-nav-backdrop,
+.sidebar-mobile-close {
+  display: none;
+}
+
+@media (max-width: 760px) {
+  .app-container {
+    height: 100dvh;
+  }
+
+  /* Existing sidebar becomes an off-canvas drawer */
+  .sidebar {
+    width: min(86vw, 320px);
+    height: 100dvh;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+    z-index: 1500;
+    box-shadow: 18px 0 48px rgba(0, 0, 0, 0.5);
+  }
+
+  .sidebar.sidebar-mobile-open {
+    transform: translateX(0);
+  }
+
+  .sidebar .orb-brand {
+    position: relative;
+  }
+
+  .sidebar-mobile-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-left: auto;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .sidebar .nav-item {
+    min-height: 44px;
+  }
+
+  .mobile-nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1450;
+    background: rgba(2, 6, 14, 0.62);
+  }
+
+  .main-content,
+  .main-content.pops-main-content {
+    margin-left: 0;
+    max-width: 100vw;
+    height: 100dvh;
+    padding: calc(68px + env(safe-area-inset-top)) 14px calc(84px + env(safe-area-inset-bottom));
+  }
+
+  .global-logo-corner,
+  .global-logo-center {
+    display: none;
+  }
+
+  /* Top bar */
+  .mobile-topbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1300;
+    height: calc(56px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) 10px 0;
+    background: linear-gradient(180deg, rgba(10, 24, 47, 0.98), rgba(7, 16, 34, 0.96));
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .mobile-topbar-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    cursor: pointer;
+  }
+
+  .mobile-topbar-orb {
+    color: var(--pops-gold);
+    border-color: rgba(251, 191, 36, 0.55);
+  }
+
+  .mobile-topbar-logo {
+    width: 30px;
+    height: 30px;
+    object-fit: contain;
+    flex-shrink: 0;
+  }
+
+  .mobile-topbar-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .mobile-topbar-title span {
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .mobile-topbar-title strong {
+    font-size: 15px;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Bottom bar */
+  .mobile-tabbar {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1300;
+    padding-bottom: env(safe-area-inset-bottom);
+    background: rgba(7, 16, 34, 0.98);
+    border-top: 1px solid var(--border-color);
+  }
+
+  .mobile-tab {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 58px;
+    border: 0;
+    background: none;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .mobile-tab.active {
+    color: var(--pops-blue-bright);
+    box-shadow: inset 0 2px 0 var(--pops-blue);
+  }
+
+  /* Content fit */
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .page-header h2,
+  .page-header h1 {
+    font-size: 22px;
+  }
+
+  .card {
+    max-width: 100%;
+    overflow-x: auto;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+
+  /* ORB assistant: full-screen sheet opened from the top bar */
+  .pops-assistant-launcher {
+    display: none !important;
+  }
+
+  .pops-assistant-dock {
+    display: block;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    z-index: 1600;
+  }
+
+  .pops-assistant-shell {
+    border-radius: 0;
+    border-width: 0;
+    padding: calc(14px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+  }
+
+  .pops-wordmark {
+    font-size: 28px;
+  }
+}
+
+/* Tablets / narrow desktop windows: keep the assistant reachable instead of hidden */
+@media (min-width: 761px) and (max-width: 920px) {
+  .pops-assistant-launcher {
+    display: block;
+  }
+
+  .pops-assistant-dock {
+    display: block;
+    width: min(392px, calc(100vw - 28px));
+  }
+}

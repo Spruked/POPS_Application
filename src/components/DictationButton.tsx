@@ -1,5 +1,6 @@
 import { Loader2, Mic, Square } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { usePlatformCapabilities } from "../utils/platform";
 
 type DictationButtonProps = {
   onTranscript: (text: string) => void;
@@ -33,6 +34,10 @@ export default function DictationButton({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const capabilities = usePlatformCapabilities();
+  // Mobile has no 127.0.0.1 STT service unless an endpoint was configured at build time.
+  const dictationDesktopOnly =
+    !!capabilities && !capabilities.dictation_service && !import.meta.env.VITE_STT_ENDPOINT;
 
   function releaseMicrophone() {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -91,6 +96,12 @@ export default function DictationButton({
 
   async function startRecording() {
     if (disabled || status === "recording" || status === "transcribing") {
+      return;
+    }
+
+    if (dictationDesktopOnly) {
+      setError("Dictation uses the POPS desktop speech service. Type your notes here on mobile.");
+      setStatus("error");
       return;
     }
 

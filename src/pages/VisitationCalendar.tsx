@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { Calendar, ChevronLeft, ChevronRight, Plus, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useToast } from '../hooks/useToast';

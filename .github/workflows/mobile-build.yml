@@ -1,0 +1,112 @@
+name: POPS mobile build
+
+on:
+  push:
+    branches: [mobile-tauri-v2]
+  pull_request:
+    branches: [mobile-tauri-v2]
+  workflow_dispatch:
+
+concurrency:
+  group: mobile-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: 20
+
+jobs:
+  validate:
+    name: Frontend + desktop Rust gate
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - name: Linux WebKit deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev libssl-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: npm ci
+      - run: npm run build
+      - run: cargo check --manifest-path src-tauri/Cargo.toml
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+
+  android:
+    name: Android APK
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK
+        run: sdkmanager --install "ndk;27.0.12077973"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: npm ci
+      - name: Generate mobile icons from POPS badge
+        run: npx tauri icon public/popsbadge.png
+      - name: Init Android project
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npx tauri android init --ci
+      - name: Build APK + AAB
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npx tauri android build --ci
+      # Release signing: add a keystore + signingConfig in gen/android when ready
+      # (secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEY_PASSWORD). Outputs are unsigned until then.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pops-android
+          path: |
+            src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+            src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
+
+  ios:
+    name: iOS
+    needs: validate
+    runs-on: macos-latest
+    env:
+      APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: src-tauri }
+      - run: npm ci
+      - run: npm run build
+      - name: Rust core compiles for iOS device
+        run: cargo build --manifest-path src-tauri/Cargo.toml --lib --target aarch64-apple-ios
+      - name: Generate mobile icons from POPS badge
+        run: npx tauri icon public/popsbadge.png
+      - name: Init iOS project
+        run: npx tauri ios init --ci
+      # Signed IPA only when an Apple team + App Store Connect API key are configured.
+      - name: Build signed IPA
+        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
+        env:
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+        run: |
+          echo "${{ secrets.APPLE_API_KEY_P8 }}" > "$APPLE_API_KEY_PATH"
+          npx tauri ios build --ci --export-method app-store-connect
+      - uses: actions/upload-artifact@v4
+        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
+        with:
+          name: pops-ios
+          path: src-tauri/gen/apple/build/**/*.ipa

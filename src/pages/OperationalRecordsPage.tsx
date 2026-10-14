@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { Download, Link2, Plus, Trash2 } from 'lucide-react';
 import Modal from '../components/Modal';
 import { useToast } from '../hooks/useToast';

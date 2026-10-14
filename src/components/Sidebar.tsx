@@ -13,12 +13,16 @@ import {
   Settings,
   Shield,
   Users,
+  X,
 } from 'lucide-react';
 import type { Page } from '../types';
 
 interface SidebarProps {
   currentPage: Page;
   onNavigate: (page: Page) => void;
+  /** Phone layout: the same sidebar is shown as an off-canvas drawer. */
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 interface NavItem {
@@ -174,7 +178,12 @@ export const APP_NAV_LABELS = navSections.reduce<Record<string, { title: string;
   {}
 );
 
-export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate: navigate, mobileOpen = false, onMobileClose }: SidebarProps) {
+  function onNavigate(page: Page) {
+    navigate(page);
+    onMobileClose?.();
+  }
+
   const initialOpen = useMemo(
     () => navSections.filter((section) => sectionHasPage(section, currentPage)).map((section) => section.title),
     [currentPage]
@@ -197,11 +206,12 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
         : [...current, section.title]
     );
 
-    if (section.page && !sectionHasPage(section, currentPage)) onNavigate(section.page);
+    // Expanding a group keeps the drawer open so the user can pick a subpage.
+    if (section.page && !sectionHasPage(section, currentPage)) navigate(section.page);
   }
 
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${mobileOpen ? 'sidebar-mobile-open' : ''}`} aria-label="POPS navigation">
       <div className="sidebar-header">
         <div className="orb-brand">
           <img src="/popsbadge.png" alt="POPS logo" className="orb-logo" />
@@ -209,6 +219,9 @@ export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
             <h1>P.O.P.S.</h1>
             <span>Case Command</span>
           </div>
+          <button type="button" className="sidebar-mobile-close" onClick={onMobileClose} aria-label="Close navigation">
+            <X size={18} />
+          </button>
         </div>
 
         <div className="beam-status">

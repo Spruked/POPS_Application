@@ -13,9 +13,10 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { invoke } from "@tauri-apps/api/tauri";
+import { invoke } from "@tauri-apps/api/core";
 import { morbManager, type MorbStatus } from "../morbs/morb_manager";
 import type { Page } from "../types";
+import { COMPACT_QUERY, usePlatformCapabilities, type PlatformCapabilities } from "../utils/platform";
 
 type DockState = "open" | "minimized" | "closed";
 
@@ -96,6 +97,30 @@ function makeCoreResponse(input: string, activePage: Page) {
   return `You are on ${currentPage}. In guided chat mode, I can help you navigate, structure a factual record, prepare a draft, or point you to the right POPS workspace.`;
 }
 
+function isCapabilityQuestion(input: string) {
+  const request = input.toLowerCase();
+  return ["mobile", "phone", "this device", "available", "what can", "can i", "offline"].some((term) => request.includes(term));
+}
+
+/** Guidance for the workflows this device can run, built from the backend capability report. */
+function mobileCapabilityGuide(caps: PlatformCapabilities) {
+  const available = [
+    caps.sqlite_vault && "case records in the local SQLite vault (Dashboard, Contacts, Calendar, Legal, Events, Members, Settings)",
+    caps.evidence_import && "importing photos, documents, and message exports into the Evidence Vault",
+    caps.evidence_hashing && "SHA-256 hashing, chain of custody, and integrity checks",
+    caps.reports_export && "drafting and exporting Reports",
+    caps.guided_assistant && "guided chat to walk you through each workflow",
+  ].filter(Boolean);
+  const desktopOnly = [
+    !caps.local_ai && "the local AI model (TPC / llama.cpp)",
+    !caps.ocr && "OCR text extraction",
+    !caps.voice_output && "voice output",
+    !caps.dictation_service && "dictation",
+    !caps.research_substrate && "substrate research",
+  ].filter(Boolean);
+  return `On this ${caps.platform} device you can use: ${available.join("; ")}.${desktopOnly.length ? ` These run on your POPS desktop workstation: ${desktopOnly.join(", ")}.` : ""}`;
+}
+
 function isResearchRequest(input: string) {
   const request = input.toLowerCase();
   return request.includes("research") || request.includes("look up") || request.includes("source") || request.includes("find information");
@@ -125,11 +150,14 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
     { id: "welcome", role: "assistant", text: "I'm here to help you organize your records, prepare a draft, find a section, or work through the page you are on." },
   ]);
   const [input, setInput] = useState("");
-  const [dockState, setDockState] = useState<DockState>("open");
+  const capabilities = usePlatformCapabilities();
+  const desktopServices = capabilities ? capabilities.local_ai : null;
+  // Phones start with the assistant closed; it opens as a full-screen sheet from the top bar.
+  const [dockState, setDockState] = useState<DockState>(() => (window.matchMedia(COMPACT_QUERY).matches ? "closed" : "open"));
   const [setupNotice, setSetupNotice] = useState<string | null>(null);
   const [morbStatus, setMorbStatus] = useState<MorbStatus>("idle");
   const [isThinking, setIsThinking] = useState(false);
-  const [guardian, setGuardian] = useState<"starting" | "ready" | "unavailable">("starting");
+  const [guardian, setGuardian] = useState<"starting" | "ready" | "unavailable" | "mobile">("starting");
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
   async function refreshGuardian() {
@@ -142,10 +170,30 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
   }
 
   useEffect(() => {
+    if (desktopServices === null) return;
+    if (!desktopServices) {
+      // Mobile build: no local service mesh to poll; ORB runs in guided mode.
+      setGuardian("mobile");
+      return;
+    }
     void refreshGuardian();
     const timer = window.setInterval(() => void refreshGuardian(), 3000);
     return () => window.clearInterval(timer);
+  }, [desktopServices]);
+
+  useEffect(() => {
+    const open = () => setDockState("open");
+    window.addEventListener("pops:open-assistant", open);
+    return () => window.removeEventListener("pops:open-assistant", open);
   }, []);
+
+  useEffect(() => {
+    if (capabilities?.mobile) {
+      setMessages((current) => current.some((message) => message.id === "mobile-guide")
+        ? current
+        : [...current, { id: "mobile-guide", role: "assistant", text: mobileCapabilityGuide(capabilities) }]);
+    }
+  }, [capabilities]);
 
   useEffect(() => {
     messageListRef.current?.scrollTo({ top: messageListRef.current.scrollHeight, behavior: "smooth" });
@@ -160,6 +208,14 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
     if (!trimmed) return;
     setMessages((current) => [...current, { id: `${Date.now()}-user`, role: "user", text: trimmed }]);
     setInput("");
+
+    if (capabilities && !capabilities.local_ai) {
+      addAssistantMessage(isCapabilityQuestion(trimmed) ? mobileCapabilityGuide(capabilities) : makeCoreResponse(trimmed, activePage));
+      if (isResearchRequest(trimmed) && !capabilities.research_substrate) {
+        setSetupNotice("Substrate research runs on the POPS desktop workstation. Your records stay available here.");
+      }
+      return;
+    }
 
     if (isResearchRequest(trimmed)) {
       setMorbStatus("working");
@@ -197,6 +253,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
 
   function handleQuickAction(action: QuickAction) {
     onNavigate(action.page);
+    if (window.matchMedia(COMPACT_QUERY).matches) setDockState("closed");
     addAssistantMessage(`I opened ${PAGE_LABELS[action.page] || action.label}. I can help you work through it one factual step at a time.`);
   }
 
@@ -240,8 +297,8 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         <section className="pops-private-status" aria-label="Guardian status">
           <Sparkles size={16} aria-hidden="true" />
           <div>
-            <strong>Guardian {guardian}</strong>
-            <span>{guardian === "ready" ? "Assistant services are available." : guardian === "starting" ? "Assistant initialization continues in the background." : "Records and case tools remain available."}</span>
+            <strong>{guardian === "mobile" ? "Guardian mobile" : `Guardian ${guardian}`}</strong>
+            <span>{guardian === "ready" ? "Assistant services are available." : guardian === "starting" ? "Assistant initialization continues in the background." : guardian === "mobile" ? "Mobile guided mode. Records, evidence, and reports are available on this device." : "Records and case tools remain available."}</span>
           </div>
           {guardian === "unavailable" && <div className="pops-header-actions"><button className="pops-header-button" type="button" onClick={() => void refreshGuardian()}>Retry</button><button className="pops-header-button" type="button" onClick={() => window.dispatchEvent(new CustomEvent("pops:open-diagnostics"))}>Diagnostics</button></div>}
         </section>
@@ -265,7 +322,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         <form className="pops-composer" onSubmit={(event) => { event.preventDefault(); handleSend(); }}>
           <textarea aria-label="Ask chat assistant" onChange={(event) => setInput(event.target.value)} placeholder="Ask the assistant or describe what happened..." rows={2} value={input} />
           <div className="pops-composer-actions">
-            <button className="pops-icon-button" type="button" title="Dictation setup" aria-label="Dictation setup" onClick={() => setSetupNotice("Dictation will use the approved POPS input adapter. It places editable text here and never submits a record automatically.")}><Mic size={17} /></button>
+            <button className="pops-icon-button" type="button" title="Dictation setup" aria-label="Dictation setup" onClick={() => setSetupNotice(capabilities && !capabilities.dictation_service ? "Dictation uses the POPS desktop speech service. Type here on mobile; nothing is submitted automatically." : "Dictation will use the approved POPS input adapter. It places editable text here and never submits a record automatically.")}><Mic size={17} /></button>
             <button className="pops-send-button" type="submit" aria-label="Send message to chat assistant" disabled={isThinking}>{isThinking ? <Sparkles size={17} /> : <Send size={17} />}</button>
           </div>
         </form>

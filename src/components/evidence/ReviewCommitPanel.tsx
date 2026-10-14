@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { CheckCircle2, LockKeyhole } from 'lucide-react';
 
 export interface ReviewCommitDraft {

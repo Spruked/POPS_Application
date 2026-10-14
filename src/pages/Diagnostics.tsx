@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { useSystem } from '../hooks/useSystem';
 import type { DiagnosticsReport } from '../types';
 

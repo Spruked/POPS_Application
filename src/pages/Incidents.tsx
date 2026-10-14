@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { invoke } from '@tauri-apps/api/tauri';
+import { invoke } from '@tauri-apps/api/core';
 import { AlertTriangle, CalendarPlus, Eye, Trash2 } from 'lucide-react';
 import { useEvidenceStore } from '../hooks/useStore';
 import { useToast } from '../hooks/useToast';

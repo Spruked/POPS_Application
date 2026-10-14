@@ -3,6 +3,8 @@ import "./styles/pops-assistant.css";
 import "./styles/pops-assistant-fit.css";
 import "./styles/pops-assistant-controls.css";
 import Sidebar, { APP_NAV_LABELS } from "./components/Sidebar";
+import MobileNav from "./components/MobileNav";
+import { useCompactViewport } from "./utils/platform";
 import ToastContainer from "./components/ToastContainer";
 import PopsAssistant from "./components/PopsAssistant";
 import CaseOverview from "./pages/CaseOverview";
@@ -34,6 +36,12 @@ import type { DossierCategory, Page } from "./types";
 function App() {
   const [page, setPage] = useState<Page>("dashboard");
   const { toasts, show } = useToast();
+  const compact = useCompactViewport();
+  const [navOpen, setNavOpen] = useState(false);
+
+  useEffect(() => {
+    if (!compact) setNavOpen(false);
+  }, [compact]);
 
   useEffect(() => {
     const openDiagnostics = () => setPage("diagnostics");
@@ -142,7 +150,16 @@ function App() {
   return (
     <div className="app-container">
       <div className="field-bg" />
-      <Sidebar currentPage={page} onNavigate={setPage} />
+      {compact && (
+        <MobileNav
+          currentPage={page}
+          onNavigate={setPage}
+          onOpenMenu={() => setNavOpen(true)}
+          onOpenAssistant={() => window.dispatchEvent(new CustomEvent("pops:open-assistant"))}
+        />
+      )}
+      {compact && navOpen && <div className="mobile-nav-backdrop" onClick={() => setNavOpen(false)} aria-hidden="true" />}
+      <Sidebar currentPage={page} onNavigate={setPage} mobileOpen={compact && navOpen} onMobileClose={() => setNavOpen(false)} />
       <main className="main-content pops-main-content">
         {pages[page] || <OperationalRecordsPage config={fallbackConfig} />}
       </main>
