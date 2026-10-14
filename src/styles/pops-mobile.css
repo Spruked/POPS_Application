@@ -217,6 +217,13 @@
   .pops-wordmark {
     font-size: 28px;
   }
+
+  /* Existing modals sit above the phone top/bottom bars */
+  .modal-overlay {
+    z-index: 1550;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
 }
 
 /* Tablets / narrow desktop windows: keep the assistant reachable instead of hidden */
@@ -228,5 +235,63 @@
   .pops-assistant-dock {
     display: block;
     width: min(392px, calc(100vw - 28px));
+  }
+}
+
+/* Camera evidence capture (Evidence Vault) */
+.camera-capture {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 18px;
+}
+
+.camera-capture .btn {
+  justify-self: start;
+  min-height: 44px;
+}
+
+.camera-capture-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.camera-capture-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  border-radius: 10px;
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--pops-success);
+}
+
+.camera-capture-result div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.camera-capture-result strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.camera-capture-result span {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.camera-capture-result code {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .camera-capture .btn {
+    justify-self: stretch;
+    justify-content: center;
   }
 }

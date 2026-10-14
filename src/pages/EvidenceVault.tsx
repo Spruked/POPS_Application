@@ -6,6 +6,7 @@ import { useToast } from '../hooks/useToast';
 import { generateId, sha256File, formatDate, formatDateTime, classNames } from '../utils/helpers';
 import Modal from '../components/Modal';
 import ReviewCommitPanel, { type ReviewCommitDraft } from '../components/evidence/ReviewCommitPanel';
+import CameraCapture from '../components/evidence/CameraCapture';
 import type { Evidence } from '../types';
 
 const EVIDENCE_TYPES = [
@@ -506,6 +507,15 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
           <Plus size={16} /> Add Evidence
         </button>
       </div>
+
+      <CameraCapture
+        add={add}
+        onSealed={(item, integrity) => {
+          show(`Photo sealed in vault (${integrity})`);
+          void openEvidenceDetail(item);
+        }}
+        onError={(message) => show(`Camera capture failed: ${message}`)}
+      />
 
       <div className="card">
         <div className="card-header">

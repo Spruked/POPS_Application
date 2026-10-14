@@ -106,7 +106,7 @@ function isCapabilityQuestion(input: string) {
 function mobileCapabilityGuide(caps: PlatformCapabilities) {
   const available = [
     caps.sqlite_vault && "case records in the local SQLite vault (Dashboard, Contacts, Calendar, Legal, Events, Members, Settings)",
-    caps.evidence_import && "importing photos, documents, and message exports into the Evidence Vault",
+    caps.evidence_import && "photographing evidence with the camera (Capture Photo seals the original with SHA-256) and importing documents and message exports into the Evidence Vault",
     caps.evidence_hashing && "SHA-256 hashing, chain of custody, and integrity checks",
     caps.reports_export && "drafting and exporting Reports",
     caps.guided_assistant && "guided chat to walk you through each workflow",
