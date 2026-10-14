@@ -7,6 +7,7 @@ import { generateId, sha256File, formatDate, formatDateTime, classNames } from '
 import Modal from '../components/Modal';
 import ReviewCommitPanel, { type ReviewCommitDraft } from '../components/evidence/ReviewCommitPanel';
 import CameraCapture from '../components/evidence/CameraCapture';
+import { EVIDENCE_SEALED_EVENT } from '../utils/evidenceCapture';
 import type { Evidence } from '../types';
 
 const EVIDENCE_TYPES = [
@@ -136,6 +137,13 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
     loadSealedRecords();
     loadAuditLedger();
   }, []);
+
+  // Captures sealed from ORB (or elsewhere) are written straight to SQLite; reload the list.
+  useEffect(() => {
+    const reload = () => void refresh().catch(() => undefined);
+    window.addEventListener(EVIDENCE_SEALED_EVENT, reload);
+    return () => window.removeEventListener(EVIDENCE_SEALED_EVENT, reload);
+  }, [refresh]);
 
   useEffect(() => {
     if (!pendingDraft) return;
@@ -509,7 +517,6 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
       </div>
 
       <CameraCapture
-        add={add}
         onSealed={(item, integrity) => {
           show(`Photo sealed in vault (${integrity})`);
           void openEvidenceDetail(item);

@@ -8,5 +8,7 @@
   <string>Import photos into your evidence vault</string>
   <key>NSMicrophoneUsageDescription</key>
   <string>Dictate notes into your case records</string>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Record where evidence photos were taken</string>
 </dict>
 </plist>

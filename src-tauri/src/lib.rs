@@ -5004,11 +5004,14 @@ mod tests {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_shell::init());
+    #[cfg(mobile)]
+    let builder = builder.plugin(tauri_plugin_geolocation::init());
+    builder
         .setup(|app| {
             let app_data = app.path().app_data_dir().ok();
             let vault_root = runtime_vault_system_dir(app_data.clone()).expect("resolve vault root");

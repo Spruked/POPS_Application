@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  Camera,
   CalendarClock,
   ChevronRight,
   FilePlus2,
@@ -16,6 +17,8 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { morbManager, type MorbStatus } from "../morbs/morb_manager";
 import type { Page } from "../types";
+import { formatLocation, sealCameraPhoto } from "../utils/evidenceCapture";
+import { readAttachLocationPref } from "../utils/location";
 import { COMPACT_QUERY, usePlatformCapabilities, type PlatformCapabilities } from "../utils/platform";
 
 type DockState = "open" | "minimized" | "closed";
@@ -159,6 +162,32 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
   const [isThinking, setIsThinking] = useState(false);
   const [guardian, setGuardian] = useState<"starting" | "ready" | "unavailable" | "mobile">("starting");
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const captureInputRef = useRef<HTMLInputElement | null>(null);
+  const [capturing, setCapturing] = useState(false);
+
+  // Quick capture: the camera opens straight from this tap (the input lives here so the
+  // user gesture is preserved on iOS/Android), then the photo is sealed and the vault opens.
+  async function handleQuickCapture(file: File | undefined) {
+    if (!file) return;
+    setCapturing(true);
+    try {
+      const result = await sealCameraPhoto(file, readAttachLocationPref());
+      const where = result.location
+        ? ` Location ${formatLocation(result.location)} attached.`
+        : result.locationMissing
+          ? " Location could not be read, so it was sealed without it."
+          : "";
+      addAssistantMessage(`Photo sealed in your Evidence Vault. SHA-256 ${result.evidence.sha256.slice(0, 16)}…, integrity ${result.integrity}.${where} Add a title and description when you're ready.`);
+      (window as any).__showToast?.(`Photo sealed in vault (${result.integrity})`);
+      onNavigate("evidence");
+      if (window.matchMedia(COMPACT_QUERY).matches) setDockState("closed");
+    } catch (error) {
+      addAssistantMessage(`Camera capture failed: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setCapturing(false);
+      if (captureInputRef.current) captureInputRef.current.value = "";
+    }
+  }
 
   async function refreshGuardian() {
     try {
@@ -313,6 +342,8 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         </section>
 
         <section className="pops-action-list" aria-label="Suggested things to do">
+          <input ref={captureInputRef} type="file" accept="image/*" capture="environment" hidden data-testid="orb-capture-input" onChange={(event) => void handleQuickCapture(event.target.files?.[0])} />
+          <button className="pops-action-card" type="button" data-testid="orb-capture-photo" disabled={capturing} onClick={() => captureInputRef.current?.click()}><span className="pops-action-icon"><Camera size={17} /></span><span className="pops-action-copy"><strong>{capturing ? "Sealing photo…" : "Capture photo evidence"}</strong><small>Open the camera and seal the original with SHA-256</small></span><ChevronRight size={17} aria-hidden="true" /></button>
           {QUICK_ACTIONS.map((action) => {
             const Icon = action.icon;
             return <button className="pops-action-card" key={action.id} onClick={() => handleQuickAction(action)} type="button"><span className="pops-action-icon"><Icon size={17} /></span><span className="pops-action-copy"><strong>{action.label}</strong><small>{action.detail}</small></span><ChevronRight size={17} aria-hidden="true" /></button>;

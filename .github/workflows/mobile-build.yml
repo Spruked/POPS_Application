@@ -59,6 +59,11 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android init --ci
+      - name: Declare location permissions (camera evidence GPS)
+        run: |
+          MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
+          grep -q ACCESS_FINE_LOCATION "$MANIFEST" || sed -i 's#<application#<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <application#' "$MANIFEST"
+          grep -n "permission" "$MANIFEST"
       - name: Build APK + AAB
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
