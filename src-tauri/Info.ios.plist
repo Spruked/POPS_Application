@@ -10,5 +10,7 @@
   <string>Dictate notes into your case records</string>
   <key>NSLocationWhenInUseUsageDescription</key>
   <string>Record where evidence photos were taken</string>
+  <key>ITSAppUsesNonExemptEncryption</key>
+  <false/>
 </dict>
 </plist>

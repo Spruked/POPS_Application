@@ -1,4 +1,5 @@
 mod local_agent;
+mod vault_transfer;
 #[path = "mcp/research_server.rs"]
 mod research_server;
 
@@ -5109,6 +5110,9 @@ pub fn run() {
             submit_evidence,
             get_evidence_metadata,
             get_evidence_locations,
+            vault_transfer::export_vault_transfer,
+            vault_transfer::inspect_vault_transfer,
+            vault_transfer::restore_vault_transfer,
             record_chain_of_custody,
             export_pdf,
             export_timeline,

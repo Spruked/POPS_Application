@@ -435,3 +435,134 @@
 .evidence-location-actions .btn {
   min-height: 44px;
 }
+
+/* Settings → Vault Transfer */
+.vault-transfer-intro {
+  color: var(--text-secondary);
+  max-width: 760px;
+  margin: 0 0 16px;
+}
+
+.vault-transfer-card {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.vault-transfer-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+}
+
+.vault-transfer-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.vault-transfer-card .btn {
+  justify-self: start;
+  min-height: 44px;
+}
+
+.vault-transfer-alert,
+.vault-transfer-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.vault-transfer-alert.ok,
+.vault-transfer-result {
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--pops-success);
+}
+
+.vault-transfer-alert.error {
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--accent-red);
+  margin-bottom: 12px;
+}
+
+.vault-transfer-result div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.vault-transfer-result strong {
+  color: var(--text-primary);
+}
+
+.vault-transfer-result span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.vault-transfer-result code,
+.vault-transfer-inspection code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.vault-transfer-inspection {
+  display: grid;
+  gap: 12px;
+}
+
+.vault-transfer-inspection dl {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.vault-transfer-inspection dt {
+  color: var(--text-muted);
+}
+
+.vault-transfer-inspection dd {
+  margin: 0;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.vault-transfer-confirm {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.vault-transfer-confirm input {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+@media (max-width: 760px) {
+  .vault-transfer-card .btn {
+    justify-self: stretch;
+    justify-content: center;
+  }
+
+  .vault-transfer-inspection dl {
+    grid-template-columns: 1fr;
+  }
+}

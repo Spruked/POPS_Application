@@ -437,6 +437,7 @@ export type Page =
   | 'settingsChatAssistant'
   | 'diagnostics'
   | 'settingsDataBackup'
+  | 'settingsVaultTransfer'
   | 'settingsSecurity'
   | 'settingsLocalStorage'
   | 'settingsPreferences'

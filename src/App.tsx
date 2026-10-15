@@ -4,6 +4,7 @@ import "./styles/pops-assistant-fit.css";
 import "./styles/pops-assistant-controls.css";
 import Sidebar, { APP_NAV_LABELS } from "./components/Sidebar";
 import MobileNav from "./components/MobileNav";
+import VaultTransfer from "./pages/VaultTransfer";
 import { useCompactViewport } from "./utils/platform";
 import ToastContainer from "./components/ToastContainer";
 import PopsAssistant from "./components/PopsAssistant";
@@ -100,6 +101,7 @@ function App() {
     settingsChatAssistant: <Settings />,
     diagnostics: <Diagnostics />,
     settingsDataBackup: <OperationalRecordsPage config={MODULE_CONFIGS.settingsDataBackup} />,
+    settingsVaultTransfer: <VaultTransfer />,
     settingsSecurity: <OperationalRecordsPage config={MODULE_CONFIGS.settingsSecurity} />,
     settingsLocalStorage: <Settings />,
     settingsPreferences: <OperationalRecordsPage config={MODULE_CONFIGS.settingsPreferences} />,

@@ -69,3 +69,28 @@ npx tauri ios build --export-method app-store-connect
 2. In GitHub, go to Settings → Secrets and variables → Actions and add:
    `ANDROID_KEY_BASE64` (contents of the .b64 file), `ANDROID_KEY_ALIAS` (`pops-upload`), `ANDROID_KEY_PASSWORD`.
 3. On the next CI run, `scripts/ci/android_signing.py` adds a release `signingConfig` to the generated `app/build.gradle.kts`. The AAB in the `pops-android` artifact is then signed and ready for Play Console upload. Enrol in Play App Signing when you create the app.
+
+## Vault Transfer (Settings → Vault Transfer)
+
+This moves a whole vault between devices, for example from desktop to phone. The package is a `.popsvault` file (zip, format `pops-vault-transfer/1`):
+- `manifest.json`: every entry's SHA-256 and size, plus a package hash over the sorted entries
+- `database/proof_of_presence.db`: a consistent `VACUUM INTO` snapshot
+- the vault folders: evidence_originals, communication_exports, case_bundles, exports, dossiers, child_support_ledger, operational_records, browser_records
+
+Restore order:
+1. Check the package hash.
+2. Extract every entry to staging and re-hash it. Any mismatch aborts, and nothing on the device changes.
+3. Run SQLite `integrity_check`.
+4. Re-hash each evidence original against its recorded sha256. Mismatches are flagged, not hidden.
+5. Rewrite the Windows/macOS/Linux vault paths for this device.
+6. Save a `pre-restore-<time>.db` snapshot.
+7. Copy the files and swap in the database with the SQLite backup API.
+8. Add one `VAULT_TRANSFER_RESTORED` chain-of-custody row per evidence item, plus one hash-linked audit-ledger entry.
+
+Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cover the round trip, a tampered entry, an altered manifest, path traversal, and cross-OS path remapping.
+
+## iOS signing (CI)
+
+Add these secrets: `APPLE_DEVELOPMENT_TEAM` (the 10-character Team ID), `APPLE_API_ISSUER`, `APPLE_API_KEY` (the Key ID), and `APPLE_API_KEY_P8` (the contents of the .p8 file). Create the key in App Store Connect → Users and Access → Integrations → App Store Connect API with the App Manager role.
+
+Register the bundle ID `com.proofofpresence.app` in the Apple Developer portal. To upload builds to TestFlight automatically, set the repository variable `IOS_UPLOAD_TESTFLIGHT=true`.

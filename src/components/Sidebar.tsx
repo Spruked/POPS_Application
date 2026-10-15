@@ -156,6 +156,7 @@ const navSections: NavSection[] = [
       { page: 'settingsChatAssistant', label: 'Chat Assistant' },
       { page: 'diagnostics', label: 'Diagnostics' },
       { page: 'settingsDataBackup', label: 'Data Backup' },
+      { page: 'settingsVaultTransfer', label: 'Vault Transfer' },
       { page: 'settingsSecurity', label: 'Security' },
       { page: 'settingsLocalStorage', label: 'Local Storage' },
       { page: 'settingsPreferences', label: 'Preferences' },
