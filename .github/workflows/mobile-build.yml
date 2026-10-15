@@ -46,9 +46,14 @@ jobs:
         with: { node-version: "${{ env.NODE_VERSION }}", cache: npm }
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: "17" }
+      # The legacy "tools" package was removed from Google's repository; install only what's needed.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install NDK
-        run: sdkmanager --install "ndk;27.0.12077973"
+        run: |
+          sdkmanager --install "ndk;27.0.12077973"
+          echo "NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
@@ -58,8 +63,6 @@ jobs:
       - name: Generate mobile icons from POPS badge
         run: npx tauri icon public/popsbadge.png
       - name: Init Android project
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android init --ci
       - name: Declare camera + location permissions (evidence capture)
         run: |
@@ -70,8 +73,6 @@ jobs:
           grep -n "uses-permission" "$MANIFEST"
       # Installable test build (signed with the Android debug key, bundles the production frontend)
       - name: Build debug APK (installable for device testing)
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --ci --apk --debug --target aarch64 --target x86_64
       # Release signing. Repository secrets (Settings -> Secrets and variables -> Actions):
       #   ANDROID_KEY_BASE64   base64 of the upload keystore (.jks)
@@ -93,8 +94,6 @@ jobs:
           } > src-tauri/gen/android/keystore.properties
           python3 scripts/ci/android_signing.py
       - name: Build release APK + AAB (signed when secrets are set)
-        env:
-          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --ci
       - uses: actions/upload-artifact@v4
         with:
@@ -122,9 +121,12 @@ jobs:
       - run: npm run build
       - name: Rust core compiles for iOS device
         run: cargo build --manifest-path src-tauri/Cargo.toml --lib --target aarch64-apple-ios
+      # `tauri ios init` needs an Apple team; without one the job ends at the Rust compile gate above.
       - name: Generate mobile icons from POPS badge
+        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
         run: npx tauri icon public/popsbadge.png
       - name: Init iOS project
+        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
         run: npx tauri ios init --ci
       # Signed IPA only when an Apple team + App Store Connect API key are configured.
       - name: Build signed IPA
