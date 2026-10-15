@@ -8,6 +8,8 @@ import Modal from '../components/Modal';
 import ReviewCommitPanel, { type ReviewCommitDraft } from '../components/evidence/ReviewCommitPanel';
 import CameraCapture from '../components/evidence/CameraCapture';
 import { EVIDENCE_SEALED_EVENT } from '../utils/evidenceCapture';
+import EvidenceLocationMap from '../components/evidence/EvidenceLocationMap';
+import { fetchEvidenceLocation, type EvidenceLocation } from '../utils/evidenceLocation';
 import type { Evidence } from '../types';
 
 const EVIDENCE_TYPES = [
@@ -106,6 +108,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
   const [selectedRecord, setSelectedRecord] = useState<SealedRecord | null>(null);
   const [selectedAuditRow, setSelectedAuditRow] = useState<AuditLedgerItem | null>(null);
   const [selectedEvidence, setSelectedEvidence] = useState<Evidence | null>(null);
+  const [selectedLocation, setSelectedLocation] = useState<EvidenceLocation | null>(null);
   const [evidenceChain, setEvidenceChain] = useState<EvidenceChainItem[]>([]);
   const [integrityResult, setIntegrityResult] = useState<IntegrityCheckResult | null>(null);
   const [sealResult, setSealResult] = useState<SealVerifiedRecordResult | null>(null);
@@ -185,6 +188,8 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
   async function openEvidenceDetail(item: Evidence) {
     setSelectedEvidence(item);
     setIntegrityResult(null);
+    setSelectedLocation(null);
+    void fetchEvidenceLocation(item.id).then(setSelectedLocation);
     try {
       const rows = await invoke<EvidenceChainItem[]>('get_evidence_chain', { evidenceId: item.id });
       setEvidenceChain(rows);
@@ -877,6 +882,12 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
               <label>SHA-256 Hash</label>
               <div className="hash-display">{selectedEvidence.sha256}</div>
             </div>
+            {selectedLocation && (
+              <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+                <label>Capture Location</label>
+                <EvidenceLocationMap location={selectedLocation} />
+              </div>
+            )}
             {integrityResult && (
               <div className="form-group" style={{ gridColumn: '1 / -1' }}>
                 <label>Integrity Check</label>

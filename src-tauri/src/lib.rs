@@ -2087,6 +2087,37 @@ fn get_evidence_metadata(db: State<DbConn>, evidence_id: String) -> Result<Strin
     serde_json::to_string(&record).map_err(|e| e.to_string())
 }
 
+/// Capture locations for every evidence item that has GPS in evidence_metadata
+/// (read-only; used by Reports for the Evidence Index and Attorney Packet).
+#[tauri::command]
+fn get_evidence_locations(db: State<DbConn>) -> Result<Vec<EvidenceMetadataRecord>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT evidence_id, document_id, file_path, file_hash, exif_json,
+                gps_lat, gps_lon, device_identity, timestamp_utc
+             FROM evidence_metadata
+             WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(EvidenceMetadataRecord {
+                evidence_id: row.get(0)?,
+                document_id: row.get(1)?,
+                file_path: row.get(2)?,
+                file_hash: row.get(3)?,
+                exif_json: row.get(4)?,
+                gps_lat: row.get(5)?,
+                gps_lon: row.get(6)?,
+                device_identity: row.get(7)?,
+                timestamp_utc: row.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn record_chain_of_custody(db: State<DbConn>, payload: String) -> Result<String, String> {
     let input: ChainOfCustodyPayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
@@ -5027,6 +5058,7 @@ pub fn run() {
             save_evidence,
             submit_evidence,
             get_evidence_metadata,
+            get_evidence_locations,
             record_chain_of_custody,
             export_pdf,
             export_timeline,

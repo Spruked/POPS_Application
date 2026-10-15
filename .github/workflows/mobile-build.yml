@@ -59,12 +59,19 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android init --ci
-      - name: Declare location permissions (camera evidence GPS)
+      - name: Declare camera + location permissions (evidence capture)
         run: |
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
-          grep -q ACCESS_FINE_LOCATION "$MANIFEST" || sed -i 's#<application#<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <application#' "$MANIFEST"
-          grep -n "permission" "$MANIFEST"
-      - name: Build APK + AAB
+          for PERM in CAMERA ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+            grep -q "android.permission.$PERM\"" "$MANIFEST" || sed -i "s#<application#<uses-permission android:name=\"android.permission.$PERM\" />\n    <application#" "$MANIFEST"
+          done
+          grep -n "uses-permission" "$MANIFEST"
+      # Installable test build (signed with the Android debug key, bundles the production frontend)
+      - name: Build debug APK (installable for device testing)
+        env:
+          NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
+        run: npx tauri android build --ci --apk --debug --target aarch64 --target x86_64
+      - name: Build release APK + AAB (unsigned until a keystore is added)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --ci

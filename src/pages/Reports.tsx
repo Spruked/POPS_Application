@@ -6,6 +6,7 @@ import { generateId, formatDate, formatDateTime, downloadTextFile } from '../uti
 import Modal from '../components/Modal';
 import { FullCaseBundleExport } from '../components/FullCaseBundleExport';
 import type { Report } from '../types';
+import { fetchEvidenceLocations, formatEvidenceLocation, type EvidenceLocation } from '../utils/evidenceLocation';
 
 const REPORT_TYPES = [
   { value: 'timeline', label: 'Timeline Report', desc: 'Chronological log of all events and evidence' },
@@ -27,7 +28,14 @@ export default function Reports() {
   const [previewReport, setPreviewReport] = useState<Report | null>(null);
   const [selectedType, setSelectedType] = useState('timeline');
 
-  function generateReportContent(type: string): string {
+  function locationLine(id: string, locations: Map<string, EvidenceLocation>) {
+    const location = locations.get(id);
+    if (!location) return '';
+    const when = location.capturedAt ? ` — captured ${formatDateTime(location.capturedAt)}` : '';
+    return `LOCATION: ${formatEvidenceLocation(location)}${when} — device-reported at capture (${location.device})\n`;
+  }
+
+  function generateReportContent(type: string, locations: Map<string, EvidenceLocation>): string {
     const now = formatDateTime(new Date().toISOString());
     let content = '';
 
@@ -86,7 +94,7 @@ TYPE: ${e.type}
 DATE: ${formatDate(e.date)}
 SHA-256: ${e.sha256}
 TAGS: ${e.tags.join(', ')}
-DESCRIPTION: ${e.description}
+${locationLine(e.id, locations)}DESCRIPTION: ${e.description}
 ${'-'.repeat(40)}
 
 `;
@@ -138,7 +146,21 @@ This packet contains ${evidence.items.length} evidence items, ${orders.items.len
         evidence.items.forEach((e, i) => {
           content += `${i + 1}. ${e.title} (${e.type}) — Hash: ${e.sha256.slice(0, 32)}...
 `;
+          const location = locations.get(e.id);
+          if (location) content += `   Location: ${formatEvidenceLocation(location)}\n`;
         });
+        const located = evidence.items.filter(e => locations.has(e.id));
+        if (located.length) {
+          content += `
+CAPTURE LOCATIONS:
+Device-reported GPS recorded at the moment of camera capture and stored with the sealed original (evidence_metadata). Accuracy is the device's own estimate.
+`;
+          located.forEach((e, i) => {
+            const location = locations.get(e.id)!;
+            content += `${i + 1}. ${e.title} — ${formatEvidenceLocation(location)}${location.capturedAt ? ` — ${formatDateTime(location.capturedAt)}` : ''} — SHA-256 ${e.sha256}
+`;
+          });
+        }
         content += `
 VIOLATIONS SUMMARY:
 `;
@@ -159,9 +181,10 @@ COURT ORDERS:
     return content;
   }
 
-  function handleGenerate() {
+  async function handleGenerate() {
     const reportType = REPORT_TYPES.find(r => r.value === selectedType);
-    const rawContent = generateReportContent(selectedType);
+    const locations = await fetchEvidenceLocations();
+    const rawContent = generateReportContent(selectedType, locations);
     const content = `# ${reportType?.label || 'POPS Report'}\n\n> Generated locally for review. The full case bundle remains the canonical machine-readable export.\n\n---\n\n${rawContent}`;
     const report: Report = {
       id: generateId(),

@@ -46,3 +46,11 @@ npx tauri ios build --export-method app-store-connect
 - **iOS**: macOS + Xcode, Apple Developer account, `APPLE_DEVELOPMENT_TEAM`. For CI IPA: secrets `APPLE_DEVELOPMENT_TEAM`, `APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_P8`.
 - **Desktop-only on mobile**: TPC/llama.cpp chat, WSL OCR, Qwen TTS, faster-whisper dictation, R-drive substrate research. They can be enabled later by pointing to a reachable endpoint.
 - **Data**: each device has its own local SQLite vault. Moving a desktop vault to a phone uses the existing Data Backup export; there is no sync.
+
+## Evidence capture (mobile additions)
+
+- **Capture Photo** (Evidence Vault and ORB): original bytes go through `import_evidence_file` → `save_evidence` → `verify_evidence_integrity`. No re-encoding.
+- **Attach location** (opt-in): the device GPS goes into `evidence_metadata` (`gps_lat`/`gps_lon`, accuracy in `exif_json`) via `submit_evidence`, which adds an `EVIDENCE_METADATA_SUBMITTED` chain row.
+- **Evidence Detail map**: coordinates come from the local vault. OpenStreetMap tiles load only after the user taps "Show map".
+- **Reports**: the Evidence Summary (Evidence Index) and Attorney Packet include capture locations, via the read-only `get_evidence_locations` command.
+- **Android CI** adds the `CAMERA`, `ACCESS_COARSE_LOCATION` and `ACCESS_FINE_LOCATION` permissions to the generated manifest. It also builds an installable **debug APK** (aarch64 + x86_64) alongside the unsigned release outputs.
