@@ -54,3 +54,18 @@ npx tauri ios build --export-method app-store-connect
 - **Evidence Detail map**: coordinates come from the local vault. OpenStreetMap tiles load only after the user taps "Show map".
 - **Reports**: the Evidence Summary (Evidence Index) and Attorney Packet include capture locations, via the read-only `get_evidence_locations` command.
 - **Android CI** adds the `CAMERA`, `ACCESS_COARSE_LOCATION` and `ACCESS_FINE_LOCATION` permissions to the generated manifest. It also builds an installable **debug APK** (aarch64 + x86_64) alongside the unsigned release outputs.
+
+## Full Case Bundle: capture locations
+
+`export_full_case_bundle` now also writes `capture_locations.json`, built from the same query (`query_evidence_locations`) that Reports uses. Each entry has the evidence id, file hash, GPS, accuracy, capture time and device. `manifest.json` lists the file and gives `capture_location_count`. `evidence_index.json` is unchanged.
+
+## Android release signing (Play Store)
+
+1. Create an upload keystore once and keep it safe. Losing it blocks updates.
+   ```bash
+   keytool -genkey -v -keystore pops-upload.jks -keyalg RSA -keysize 2048 -validity 10000 -alias pops-upload
+   base64 -w0 pops-upload.jks > pops-upload.jks.b64   # macOS: base64 -i pops-upload.jks
+   ```
+2. In GitHub, go to Settings → Secrets and variables → Actions and add:
+   `ANDROID_KEY_BASE64` (contents of the .b64 file), `ANDROID_KEY_ALIAS` (`pops-upload`), `ANDROID_KEY_PASSWORD`.
+3. On the next CI run, `scripts/ci/android_signing.py` adds a release `signingConfig` to the generated `app/build.gradle.kts`. The AAB in the `pops-android` artifact is then signed and ready for Play Console upload. Enrol in Play App Signing when you create the app.

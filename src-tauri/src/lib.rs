@@ -2092,12 +2092,19 @@ fn get_evidence_metadata(db: State<DbConn>, evidence_id: String) -> Result<Strin
 #[tauri::command]
 fn get_evidence_locations(db: State<DbConn>) -> Result<Vec<EvidenceMetadataRecord>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+    query_evidence_locations(&conn)
+}
+
+/// Shared by Reports (get_evidence_locations) and the Full Case Bundle so both
+/// exports carry identical capture-location data.
+fn query_evidence_locations(conn: &rusqlite::Connection) -> Result<Vec<EvidenceMetadataRecord>, String> {
     let mut stmt = conn
         .prepare(
             "SELECT evidence_id, document_id, file_path, file_hash, exif_json,
                 gps_lat, gps_lon, device_identity, timestamp_utc
              FROM evidence_metadata
-             WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL",
+             WHERE gps_lat IS NOT NULL AND gps_lon IS NOT NULL
+             ORDER BY timestamp_utc ASC",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -2471,12 +2478,38 @@ fn export_full_case_bundle(
         &bundle_dir.join("timeline_events.json"),
         &export_table_as_json(&conn, "events", "created_at DESC")?,
     )?;
+    // Capture locations (device GPS recorded at camera capture, from evidence_metadata).
+    // Kept as a separate file so evidence_index.json stays byte-compatible with desktop bundles.
+    let capture_locations: Vec<serde_json::Value> = query_evidence_locations(&conn)?
+        .into_iter()
+        .map(|record| {
+            let exif: serde_json::Value =
+                serde_json::from_str(&record.exif_json).unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "evidence_id": record.evidence_id,
+                "file_hash": record.file_hash,
+                "file_path": record.file_path,
+                "gps_lat": record.gps_lat,
+                "gps_lon": record.gps_lon,
+                "accuracy_m": exif.get("accuracy_m").cloned().unwrap_or(serde_json::Value::Null),
+                "captured_at": exif.get("captured_at").cloned().unwrap_or(serde_json::Value::Null),
+                "device_identity": record.device_identity,
+                "recorded_at_utc": record.timestamp_utc,
+                "source": "device-reported location at capture",
+            })
+        })
+        .collect();
+    write_json_file(
+        &bundle_dir.join("capture_locations.json"),
+        &serde_json::to_string_pretty(&capture_locations).map_err(|e| e.to_string())?,
+    )?;
     write_json_file(
         &bundle_dir.join("manifest.json"),
         &serde_json::to_string_pretty(&serde_json::json!({
             "case_id": case_id,
             "created_at_utc": timestamp,
-            "contents": ["case_summary.json", "evidence_index.json", "timeline_events.json"]
+            "contents": ["case_summary.json", "evidence_index.json", "timeline_events.json", "capture_locations.json"],
+            "capture_location_count": capture_locations.len()
         }))
         .map_err(|e| e.to_string())?,
     )?;
@@ -4907,6 +4940,23 @@ async fn local_agent_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn capture_locations_include_only_gps_rows() {
+        let conn = init_db(":memory:");
+        conn.execute(
+            "INSERT INTO evidence_metadata (evidence_id, document_id, file_hash, file_path, exif_json, gps_lat, gps_lon, device_identity, timestamp_utc)
+             VALUES ('ev-gps', 'ev-gps', 'abc123', '/vault/a.jpg', '{\"accuracy_m\":12.4,\"captured_at\":\"2026-10-14T10:00:00Z\"}', 39.7392358, -104.990251, 'POPS android', '2026-10-14T10:00:01Z'),
+                    ('ev-plain', 'ev-plain', 'def456', '/vault/b.pdf', '{}', NULL, NULL, 'POPS windows', '2026-10-14T11:00:00Z')",
+            [],
+        )
+        .expect("insert metadata");
+        let rows = query_evidence_locations(&conn).expect("query locations");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].evidence_id, "ev-gps");
+        assert_eq!(rows[0].gps_lat, Some(39.7392358));
+        assert_eq!(rows[0].gps_lon, Some(-104.990251));
+    }
 
     fn test_dossier(id: &str, status: &str) -> PlayerDossierItem {
         PlayerDossierItem {

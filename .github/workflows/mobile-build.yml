@@ -38,6 +38,8 @@ jobs:
     name: Android APK
     needs: validate
     runs-on: ubuntu-latest
+    env:
+      ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -71,12 +73,29 @@ jobs:
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --ci --apk --debug --target aarch64 --target x86_64
-      - name: Build release APK + AAB (unsigned until a keystore is added)
+      # Release signing. Repository secrets (Settings -> Secrets and variables -> Actions):
+      #   ANDROID_KEY_BASE64   base64 of the upload keystore (.jks)
+      #   ANDROID_KEY_ALIAS    key alias inside the keystore
+      #   ANDROID_KEY_PASSWORD store/key password
+      # Without them the release outputs stay unsigned (the debug APK above is still installable).
+      - name: Configure release signing
+        if: ${{ env.ANDROID_KEY_BASE64 != '' }}
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEY_BASE64" | base64 -d > "$RUNNER_TEMP/pops-upload.jks"
+          {
+            echo "keyAlias=$ANDROID_KEY_ALIAS"
+            echo "password=$ANDROID_KEY_PASSWORD"
+            echo "storeFile=$RUNNER_TEMP/pops-upload.jks"
+          } > src-tauri/gen/android/keystore.properties
+          python3 scripts/ci/android_signing.py
+      - name: Build release APK + AAB (signed when secrets are set)
         env:
           NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.0.12077973
         run: npx tauri android build --ci
-      # Release signing: add a keystore + signingConfig in gen/android when ready
-      # (secrets ANDROID_KEYSTORE_BASE64 / ANDROID_KEY_PASSWORD). Outputs are unsigned until then.
       - uses: actions/upload-artifact@v4
         with:
           name: pops-android
