@@ -87,5 +87,5 @@ First mobile release of P.O.P.S. It brings the full desktop case vault to your p
 2. In Google Cloud, go to IAM → Service accounts, create `pops-ci`, then Keys → Add key → JSON.
 3. Back in Play Console → Users and permissions, invite the service account email with **Release to testing tracks** for P.O.P.S.
 4. Add the JSON as the GitHub secret `PLAY_SERVICE_ACCOUNT_JSON`.
-5. Every push to `mobile-tauri-v2` then uploads the signed AAB to **Internal testing**. The versionCode is 1000000 plus the CI run number, so it always increases.
+5. Every push to `mobile-tauri-v2` then uploads the signed AAB (this needs the `ANDROID_KEY_*` signing secrets as well, which are already set) to **Internal testing**. The versionCode is 1000000 plus the CI run number, so it always increases.
 6. Releases are created as **draft** until you set the repository variable `PLAY_RELEASE_STATUS=completed`. Do this after the app's first manual release has been reviewed; Google only allows draft releases on a draft app.
