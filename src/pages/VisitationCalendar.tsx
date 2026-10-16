@@ -233,7 +233,7 @@ export default function VisitationCalendar() {
                 onClick={() => setSelectedDate(dateKey)}
               >
                 <div className="viscal-day-num">{day}</div>
-                <div className="viscal-day-meta">
+                <div className={`viscal-day-meta ${daily.length > 0 ? 'has-records' : ''}`}>
                   {daily.length > 0 ? `${daily.length} record${daily.length > 1 ? 's' : ''}` : 'No records'}
                 </div>
               </button>

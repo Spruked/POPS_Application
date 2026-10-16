@@ -102,6 +102,47 @@ jobs:
             src-tauri/gen/android/app/build/outputs/apk/**/*.apk
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
 
+  android-smoke:
+    name: Android emulator smoke test
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: pops-android, path: artifact }
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Boot emulator, install debug APK, launch POPS
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: |
+            APK=$(find artifact -name "app-universal-debug.apk" | head -1); echo "APK=$APK"; adb install -r -g "$APK"
+            adb logcat -c
+            adb emu geo fix -104.990251 39.7392358
+            adb shell monkey -p com.proofofpresence.app -c android.intent.category.LAUNCHER 1
+            sleep 45
+            adb shell pidof com.proofofpresence.app > pid.txt || true
+            adb exec-out screencap -p > pops-launch.png
+            adb logcat -d > logcat.txt
+            adb shell dumpsys package com.proofofpresence.app | grep -E "permission\.(CAMERA|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION)" > permissions.txt || true
+            echo "--- pid:"; cat pid.txt; echo "--- permissions:"; cat permissions.txt
+            echo "--- crash scan:"; grep -nE "FATAL EXCEPTION|panicked at|AndroidRuntime: Process: com.proofofpresence.app" logcat.txt || echo "no crashes"
+            test -s pid.txt
+            ! grep -qE "FATAL EXCEPTION|panicked at" logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pops-android-smoke
+          path: |
+            pops-launch.png
+            logcat.txt
+            permissions.txt
+
   ios:
     name: iOS
     needs: validate

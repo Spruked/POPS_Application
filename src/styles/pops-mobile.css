@@ -566,3 +566,34 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Phone fixes found in store-screenshot review */
+@media (max-width: 760px) {
+  /* Page headers with inline flex rows: stack title above actions */
+  .main-content .page-header {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .main-content .page-header > div:last-child:not(:first-child) {
+    flex-wrap: wrap;
+  }
+
+  /* Month grid: 7 columns at phone width; show counts only on days with records */
+  .viscal-day {
+    min-width: 0;
+    padding: 6px 2px;
+  }
+
+  .viscal-day-meta {
+    display: none;
+  }
+
+  .viscal-day-meta.has-records {
+    display: block;
+    font-size: 9px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}

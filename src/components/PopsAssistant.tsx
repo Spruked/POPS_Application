@@ -334,7 +334,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
 
         <section className="pops-private-status" aria-label="Research status">
           <Sparkles size={16} aria-hidden="true" />
-          <div><strong>{researchStatusCopy(morbStatus)}</strong><span>User-directed research only</span></div>
+          <div><strong>{capabilities && !capabilities.research_substrate ? "Research on desktop" : researchStatusCopy(morbStatus)}</strong><span>{capabilities && !capabilities.research_substrate ? "Substrate research runs on the POPS workstation" : "User-directed research only"}</span></div>
         </section>
 
         <section className="pops-conversation" aria-live="polite" ref={messageListRef}>
