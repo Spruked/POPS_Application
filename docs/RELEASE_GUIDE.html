@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>POPS Mobile – Install &amp; Release Guide</title>
+<style>
+  body { font-family: Georgia, "Times New Roman", serif; max-width: 780px; margin: 24px auto; padding: 0 20px; color: #111; line-height: 1.5; }
+  h1 { font-size: 26px; border-bottom: 3px solid #111; padding-bottom: 6px; }
+  h2 { font-size: 20px; margin-top: 32px; border-bottom: 1px solid #999; padding-bottom: 4px; page-break-after: avoid; }
+  ol > li { margin-bottom: 10px; }
+  code { font-family: Consolas, monospace; background: #eee; padding: 1px 5px; border-radius: 3px; }
+  .box { border: 1px solid #333; padding: 10px 14px; margin: 14px 0; background: #f7f7f7; }
+  .check { display: inline-block; width: 14px; height: 14px; border: 1.5px solid #111; margin-right: 8px; vertical-align: -2px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+  td, th { border: 1px solid #555; padding: 6px 8px; text-align: left; vertical-align: top; }
+  .noprint { margin: 12px 0; }
+  .noprint button { font-size: 16px; padding: 10px 18px; cursor: pointer; }
+  section { page-break-inside: avoid; }
+  @media print { .noprint { display: none; } body { margin: 0; } }
+</style>
+</head>
+<body>
+<div class="noprint"><button onclick="window.print()">🖨 Print this guide</button></div>
+
+<h1>POPS Mobile: Install &amp; Release Guide</h1>
+<p><b>App:</b> POPS (Proof of Presence) &nbsp;|&nbsp; <b>Android package:</b> <code>com.proofofpresence.app</code><br>
+<b>Repository:</b> github.com/Spruked/POPS_Application &nbsp;|&nbsp; <b>Branch:</b> <code>mobile-tauri-v2</code></p>
+
+<div class="box"><b>Note:</b> POPS is a Tauri app, so it does <u>not</u> run in the Emergent preview window or in Expo Go. To try it you install the Android file (APK) built by GitHub Actions, as described in Part 1.</div>
+
+<section>
+<h2>Part 1: Install POPS on your Android phone (about 5 minutes)</h2>
+<ol>
+  <li><span class="check"></span>Go to <b>github.com/Spruked/POPS_Application</b> and sign in.</li>
+  <li><span class="check"></span>Open the <b>Actions</b> tab and click the latest run with a <b>green check</b> on branch <code>mobile-tauri-v2</code>.</li>
+  <li><span class="check"></span>Scroll to the bottom to <b>Artifacts</b> and download <b>pops-android</b>. You get a .zip file.</li>
+  <li><span class="check"></span>Unzip it and find <code>apk/universal/debug/app-universal-debug.apk</code>.</li>
+  <li><span class="check"></span>Copy the APK to your phone. You can email it to yourself, upload it to Google Drive, or use a USB cable.</li>
+  <li><span class="check"></span>Tap the APK on your phone. When Android asks, allow <b>"Install unknown apps"</b> for that app (Files, Gmail or Drive), then tap <b>Install</b>.</li>
+  <li><span class="check"></span>Open POPS. Allow <b>Camera</b> and <b>Location</b> when it asks.</li>
+</ol>
+</section>
+
+<section>
+<h2>Part 2: Phone test checklist</h2>
+<table>
+  <tr><th style="width:28%">Feature</th><th>What to try</th><th style="width:16%">Works?</th></tr>
+  <tr><td>Evidence Camera</td><td>Evidence → Capture photo. Check that the photo saves and shows a SHA-256 seal.</td><td>Yes / No</td></tr>
+  <tr><td>GPS capture</td><td>Capture with location turned on. Check that the coordinates appear on the item.</td><td>Yes / No</td></tr>
+  <tr><td>Evidence Map</td><td>Open the map. Check that your captured items show as pins.</td><td>Yes / No</td></tr>
+  <tr><td>Reports</td><td>Make a report or attorney packet. Check that the capture locations are included.</td><td>Yes / No</td></tr>
+  <tr><td>Vault Transfer</td><td>Export the vault on desktop, import it on the phone, and check that your records appear.</td><td>Yes / No</td></tr>
+  <tr><td>Navigation</td><td>Visit Dashboard, Contacts, Calendar, Legal, Events, Members, Settings and ORB.</td><td>Yes / No</td></tr>
+</table>
+<p>Notes / problems found:<br>_____________________________________________________________________________<br><br>_____________________________________________________________________________</p>
+</section>
+
+<section>
+<h2>Part 3: First upload to Google Play (one time, by hand)</h2>
+<p>Google requires the first build to be uploaded by hand. After that, uploads can be automatic (Part 4).</p>
+<ol>
+  <li><span class="check"></span>Open <b>play.google.com/console</b> → <b>Create app</b>. Name: POPS. Choose App, Free, and accept the declarations.</li>
+  <li><span class="check"></span>In the left menu go to <b>Test and release → Testing → Internal testing</b> → <b>Create new release</b>.</li>
+  <li><span class="check"></span>Upload <code>bundle/universalRelease/app-universal-release.aab</code> from the same <b>pops-android</b> zip from Part 1.</li>
+  <li><span class="check"></span>Make sure the package name shows <code>com.proofofpresence.app</code>. Save the release and roll it out to internal testing.</li>
+  <li><span class="check"></span>Open the <b>Testers</b> tab, create an email list, add your Gmail, and save. Then open the <b>opt-in link</b> on your phone to install from Play.</li>
+  <li><span class="check"></span>Fill in <b>App content</b>, including the privacy policy URL: <code>https://www.popsproof.com/privacy</code> (the page is in <code>store/privacy.html</code>).</li>
+</ol>
+</section>
+
+<section>
+<h2>Part 4: Turn on automatic Play uploads from GitHub</h2>
+<p><b>Step A: Create a service account key in Google Cloud</b></p>
+<ol>
+  <li><span class="check"></span>Open <b>console.cloud.google.com</b> and select (or create) a project.</li>
+  <li><span class="check"></span>Go to <b>APIs &amp; Services → Library</b>, search for <b>Google Play Android Developer API</b>, and click <b>Enable</b>.</li>
+  <li><span class="check"></span>Go to <b>IAM &amp; Admin → Service Accounts → Create service account</b>. Name it <code>pops-ci</code>, then click Done.</li>
+  <li><span class="check"></span>Open the new account → <b>Keys</b> → <b>Add key → Create new key → JSON</b>. A .json file downloads. <b>Keep it private.</b></li>
+  <li><span class="check"></span>Copy the service account email (it looks like <code>pops-ci@your-project.iam.gserviceaccount.com</code>).</li>
+</ol>
+<p><b>Step B: Give that account access in Play Console</b></p>
+<ol start="6">
+  <li><span class="check"></span>Play Console → <b>Users and permissions → Invite new users</b>.</li>
+  <li><span class="check"></span>Paste the service account email. Under <b>App permissions</b>, add POPS and tick <b>Release apps to testing tracks</b> and <b>Manage testing tracks</b> (or choose Admin).</li>
+  <li><span class="check"></span>Click <b>Invite user</b>. Access can take a few minutes, and sometimes up to 24 hours, to start working.</li>
+</ol>
+<p><b>Step C: Add the secret to GitHub</b></p>
+<ol start="9">
+  <li><span class="check"></span>GitHub repo → <b>Settings → Secrets and variables → Actions → New repository secret</b>.</li>
+  <li><span class="check"></span>Name: <code>PLAY_SERVICE_ACCOUNT_JSON</code> (exactly this). Value: open the .json file in a text editor and paste <b>the whole contents</b>, including the { } brackets.</li>
+  <li><span class="check"></span>Optional: on the <b>Variables</b> tab, add <code>PLAY_RELEASE_STATUS</code> = <code>completed</code> once Google has approved the app. Until then, uploads arrive as drafts.</li>
+  <li><span class="check"></span>Push any change to <code>mobile-tauri-v2</code>, or re-run the workflow. In Actions, the step <b>"Upload to Google Play internal testing"</b> should now run instead of showing "skipped".</li>
+</ol>
+</section>
+
+<section>
+<h2>Part 5: iOS signed builds (when you are ready)</h2>
+<p>You need an Apple Developer Program membership ($99/year). Add these GitHub secrets the same way as in Step C:</p>
+<table>
+  <tr><th>Secret name</th><th>Where to find it</th></tr>
+  <tr><td><code>APPLE_TEAM_ID</code></td><td>developer.apple.com → Account → Membership details → Team ID</td></tr>
+  <tr><td><code>APPLE_API_KEY_ID</code></td><td>App Store Connect → Users and Access → Integrations → App Store Connect API → Generate key (Admin role) → Key ID</td></tr>
+  <tr><td><code>APPLE_API_ISSUER</code></td><td>The Issuer ID shown at the top of that same page</td></tr>
+  <tr><td><code>APPLE_API_KEY</code></td><td>Download the .p8 key file (you can only download it once) and paste its full text</td></tr>
+</table>
+</section>
+
+<section>
+<h2>All GitHub secrets at a glance</h2>
+<table>
+  <tr><th>Secret</th><th>Purpose</th><th>Status</th></tr>
+  <tr><td><code>ANDROID_KEY_BASE64</code>, <code>ANDROID_KEY_ALIAS</code>, <code>ANDROID_KEY_PASSWORD</code></td><td>Signs Android release builds</td><td>Done</td></tr>
+  <tr><td><code>PLAY_SERVICE_ACCOUNT_JSON</code></td><td>Automatic upload to Play internal testing</td><td>☐ To do</td></tr>
+  <tr><td><code>APPLE_TEAM_ID</code>, <code>APPLE_API_KEY_ID</code>, <code>APPLE_API_ISSUER</code>, <code>APPLE_API_KEY</code></td><td>Signed iOS builds</td><td>☐ To do</td></tr>
+</table>
+<p><b>Keep safe and never share publicly:</b> the upload keystore (.jks) and its password, the service account .json, and the Apple .p8 key.</p>
+</section>
+</body>
+</html>
