@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+      PLAY_SERVICE_ACCOUNT_JSON: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -93,8 +94,24 @@ jobs:
             echo "storeFile=$RUNNER_TEMP/pops-upload.jks"
           } > src-tauri/gen/android/keystore.properties
           python3 scripts/ci/android_signing.py
+      # versionCode must increase on every Play upload: 1.0.0 -> 1000000, plus the CI run number.
       - name: Build release APK + AAB (signed when secrets are set)
-        run: npx tauri android build --ci
+        run: |
+          VERSION_CODE=$((1000000 + ${{ github.run_number }}))
+          echo "VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          npx tauri android build --ci --config "{\"bundle\":{\"android\":{\"versionCode\":$VERSION_CODE}}}"
+      # Play internal testing upload. Needs secret PLAY_SERVICE_ACCOUNT_JSON (Play Console → Setup → API access).
+      # Repository variable PLAY_RELEASE_STATUS: "draft" until the app's first review is done, then "completed".
+      - name: Upload to Google Play internal testing
+        if: ${{ env.PLAY_SERVICE_ACCOUNT_JSON != '' && env.ANDROID_KEY_BASE64 != '' && github.event_name == 'push' }}
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.proofofpresence.app
+          releaseFiles: src-tauri/gen/android/app/build/outputs/bundle/universalRelease/app-universal-release.aab
+          track: internal
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+          releaseName: "POPS ${{ env.VERSION_CODE }}"
       - uses: actions/upload-artifact@v4
         with:
           name: pops-android

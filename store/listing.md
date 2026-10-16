@@ -7,7 +7,7 @@ Assets are in `store/assets/`. To regenerate them, run `python3 store/generate_a
 - **Package / bundle ID:** `com.proofofpresence.app`
 - **Category:** Productivity (Play) · Productivity (App Store; secondary: Utilities)
 - **Website:** https://www.popsproof.com
-- **Privacy policy URL:** https://www.popsproof.com/privacy (required by both stores; the text below can be published there)
+- **Privacy policy URL:** https://www.popsproof.com/privacy. Publish `store/privacy.html` there together with `public/popsbadge.png`.
 - **Support email:** use the address on popsproof.com
 
 ## Short description (Play, max 80 chars)
@@ -81,3 +81,11 @@ First mobile release of P.O.P.S. It brings the full desktop case vault to your p
 | App Store | App icon 1024×1024 (no alpha) | `assets/appstore-icon-1024.png` |
 | App Store | 6.9" screenshots 1320×2868 | `assets/appstore-6.9-*.png` |
 | App Store | 6.5" screenshots 1284×2778 | `assets/appstore-6.5-*.png` |
+
+## Automatic Play uploads (CI)
+1. In Play Console, go to Setup → API access and link or create a Google Cloud project.
+2. In Google Cloud, go to IAM → Service accounts, create `pops-ci`, then Keys → Add key → JSON.
+3. Back in Play Console → Users and permissions, invite the service account email with **Release to testing tracks** for P.O.P.S.
+4. Add the JSON as the GitHub secret `PLAY_SERVICE_ACCOUNT_JSON`.
+5. Every push to `mobile-tauri-v2` then uploads the signed AAB to **Internal testing**. The versionCode is 1000000 plus the CI run number, so it always increases.
+6. Releases are created as **draft** until you set the repository variable `PLAY_RELEASE_STATUS=completed`. Do this after the app's first manual release has been reviewed; Google only allows draft releases on a draft app.
