@@ -597,3 +597,9 @@
     text-overflow: ellipsis;
   }
 }
+
+/* Reminder engine: due / time-zone banner (all platforms) */
+.pops-reminder-banner { position: fixed; left: 50%; transform: translateX(-50%); top: calc(12px + env(safe-area-inset-top, 0px)); z-index: 9000; width: min(720px, calc(100vw - 24px)); display: grid; gap: 8px; }
+.pops-reminder-banner-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: 12px; background: #2a0f12; border: 1px solid #ef4444; color: #fde8e8; box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 14px; line-height: 1.45; }
+.pops-reminder-banner-row span { flex: 1 1 220px; }
+.pops-reminder-banner-row .btn { min-height: 40px; }

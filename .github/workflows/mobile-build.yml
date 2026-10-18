@@ -65,12 +65,14 @@ jobs:
         run: npx tauri icon public/popsbadge.png
       - name: Init Android project
         run: npx tauri android init --ci
-      - name: Declare camera + location permissions (evidence capture)
+      - name: Declare camera, location + exact-alarm permissions (evidence capture, court reminders)
         run: |
           MANIFEST=src-tauri/gen/android/app/src/main/AndroidManifest.xml
-          for PERM in CAMERA ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION; do
+          for PERM in CAMERA ACCESS_COARSE_LOCATION ACCESS_FINE_LOCATION USE_EXACT_ALARM; do
             grep -q "android.permission.$PERM\"" "$MANIFEST" || sed -i "s#<application#<uses-permission android:name=\"android.permission.$PERM\" />\n    <application#" "$MANIFEST"
           done
+          # Android 12 (API 31-32) needs SCHEDULE_EXACT_ALARM; 13+ uses USE_EXACT_ALARM (calendar/reminder apps).
+          grep -q "SCHEDULE_EXACT_ALARM" "$MANIFEST" || sed -i "s#<application#<uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" android:maxSdkVersion=\"32\" />\n    <application#" "$MANIFEST"
           grep -n "uses-permission" "$MANIFEST"
       # Installable test build (signed with the Android debug key, bundles the production frontend)
       - name: Build debug APK (installable for device testing)
@@ -120,9 +122,14 @@ jobs:
             src-tauri/gen/android/app/build/outputs/bundle/**/*.aab
 
   android-smoke:
-    name: Android emulator smoke test
+    name: Android emulator smoke test (API ${{ matrix.api-level }})
     needs: android
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24 = Android 7.0, the oldest version POPS installs on; 33 = Android 13.
+        api-level: [24, 33]
     steps:
       - uses: actions/download-artifact@v4
         with: { name: pops-android, path: artifact }
@@ -133,7 +140,7 @@ jobs:
       - name: Boot emulator, install debug APK, launch POPS
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 33
+          api-level: ${{ matrix.api-level }}
           arch: x86_64
           target: google_apis
           disable-animations: true
@@ -146,7 +153,9 @@ jobs:
             adb shell pidof com.proofofpresence.app > pid.txt || true
             adb exec-out screencap -p > pops-launch.png
             adb logcat -d > logcat.txt
-            adb shell dumpsys package com.proofofpresence.app | grep -E "permission\.(CAMERA|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION)" > permissions.txt || true
+            adb shell dumpsys package com.proofofpresence.app | grep -E "permission\.(CAMERA|ACCESS_FINE_LOCATION|ACCESS_COARSE_LOCATION|POST_NOTIFICATIONS|USE_EXACT_ALARM|SCHEDULE_EXACT_ALARM|RECEIVE_BOOT_COMPLETED)" > permissions.txt || true
+            adb shell dumpsys package com.google.android.webview | grep -m1 versionName > webview.txt || true
+            echo "--- webview:"; cat webview.txt
             echo "--- pid:"; cat pid.txt; echo "--- permissions:"; cat permissions.txt
             echo "--- crash scan:"; grep -nE "FATAL EXCEPTION|panicked at|AndroidRuntime: Process: com.proofofpresence.app" logcat.txt || echo "no crashes"
             test -s pid.txt
@@ -154,8 +163,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: pops-android-smoke
+          name: pops-android-smoke-api${{ matrix.api-level }}
           path: |
+            webview.txt
             pops-launch.png
             logcat.txt
             permissions.txt
