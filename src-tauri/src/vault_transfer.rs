@@ -324,6 +324,9 @@ pub fn prepare_staged_database(
     if check != "ok" {
         return Err(format!("Database snapshot failed SQLite integrity_check: {check}"));
     }
+    // The restore entry is appended to the incoming ledger after the swap; refuse a
+    // forked or broken chain now, before anything on this device is replaced.
+    get_previous_ledger_hash(staged_db).map_err(|e| format!("Transfer package rejected: {e}"))?;
 
     let mut verified = 0;
     let mut mismatched = Vec::new();
@@ -825,6 +828,33 @@ mod tests {
         assert_eq!(sha, hash);
         assert_eq!(custody_rows(&desk, "m9cam_cccc"), custody);
         assert_eq!(ledger_status(&desk), ("VERIFIED".into(), 2));
+    }
+
+    #[test]
+    fn restore_rejects_forked_incoming_ledger_before_touching_the_device() {
+        let (desk_root, desk) = vault_at("g1-fork-desk");
+        add_evidence(&desk, &desk_root, "C:\\POPS\\Vault_System", '\\', "fk1_hhhh", b"z");
+        let genesis = append_ledger_at(&desk, "rec-1", "REPORT_SAVED", "2026-10-14T10:00:00+00:00");
+        append_ledger_at(&desk, "rec-2", "REPORT_SAVED", "2026-10-14T11:00:00+00:00");
+        let fork = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-10-14T12:00:00+00:00", "{}", Some(&genesis));
+        desk.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES ('fork', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-10-14T12:00:00+00:00', '{}', ?1, ?2)",
+            rusqlite::params![genesis, fork],
+        )
+        .unwrap();
+
+        let (manifest, cursor) = write_package(&desk, &desk_root, Cursor::new(Vec::new()), "windows", "1.0.0").unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(cursor.into_inner())).unwrap();
+        let staging = temp_dir("g1-fork-staging");
+        extract_verified(&mut archive, &manifest, &staging).unwrap();
+        let staged = rusqlite::Connection::open(staging.join(DB_ENTRY)).unwrap();
+
+        let (phone_root, phone) = vault_at("g1-fork-phone");
+        let err = prepare_staged_database(&staged, &staging, &phone_root).unwrap_err();
+        assert!(err.contains("Transfer package rejected") && err.contains("not linear"), "{err}");
+        let phone_evidence: i64 = phone.query_row("SELECT COUNT(*) FROM evidence", [], |r| r.get(0)).unwrap();
+        assert_eq!(phone_evidence, 0);
     }
 
     /// Regression for G1: the sending desktop's clock is two minutes ahead of the phone.

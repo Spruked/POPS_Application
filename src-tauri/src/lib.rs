@@ -1812,9 +1812,14 @@ fn court_safe_incident_summary(input: &IncidentInput) -> String {
 /// The chain tip: the hashed entry that no other entry links to as its previous hash.
 /// Chain order comes from the hash links, not wall-clock `created_at`, so records moved
 /// between devices with different clocks (Vault Transfer) still append to the true tip.
-/// `created_at` only breaks a tie when a ledger is already ambiguous (legacy behaviour).
+///
+/// Appending requires the hashed entries to form one linear chain: exactly one root
+/// (no predecessor in the ledger) and exactly one tip. A fork (two tips) or a missing
+/// or deleted predecessor (two roots) is refused, so a structurally invalid ledger is
+/// never silently continued. Unhashed rows from before hash-linking existed are not
+/// part of the chain and are ignored here, as before; Verify Ledger still reports them.
 fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
-    let mut stmt = conn
+    let tips: Vec<String> = conn
         .prepare(
             "SELECT a.ledger_entry_hash
              FROM audit_ledger a
@@ -1823,15 +1828,33 @@ fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String
                    SELECT 1 FROM audit_ledger b
                    WHERE b.previous_ledger_hash = a.ledger_entry_hash
                )
-             ORDER BY a.created_at DESC, a.id DESC
-             LIMIT 1",
+             LIMIT 2",
+        )
+        .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
+        .map_err(|e| e.to_string())?;
+    let roots: i64 = conn
+        .query_row(
+            "SELECT COUNT(*)
+             FROM audit_ledger a
+             WHERE a.ledger_entry_hash IS NOT NULL
+               AND (a.previous_ledger_hash IS NULL
+                    OR NOT EXISTS (
+                        SELECT 1 FROM audit_ledger p
+                        WHERE p.ledger_entry_hash = a.previous_ledger_hash
+                    ))",
+            [],
+            |row| row.get(0),
         )
         .map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        row.get(0).map_err(|e| e.to_string())
-    } else {
-        Ok(None)
+
+    match (tips.as_slice(), roots) {
+        ([], 0) => Ok(None),
+        ([tip], 1) => Ok(Some(tip.clone())),
+        _ => Err(format!(
+            "Audit ledger chain is not linear ({} tip(s), {} root(s)). No entry was appended. Run Verify Ledger and resolve the breach before recording more changes.",
+            tips.len(),
+            roots
+        )),
     }
 }
 
@@ -5074,6 +5097,60 @@ mod tests {
             .unwrap();
         assert_eq!(status(&unhashed).0, "BREACH");
         assert_eq!(legacy_verify(&unhashed).0, false);
+    }
+
+    fn ledger_rows(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM audit_ledger", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn append_refuses_forked_chain_and_writes_nothing() {
+        let conn = single_clock_ledger(3);
+        let genesis: String = conn.query_row("SELECT ledger_entry_hash FROM audit_ledger WHERE id = 'row-0'", [], |r| r.get(0)).unwrap();
+        let entry = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-12-01T00:00:00+00:00", "{}", Some(&genesis));
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES ('row-x', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?1, ?2)",
+            rusqlite::params![genesis, entry],
+        )
+        .unwrap();
+        let before = ledger_rows(&conn);
+
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("not linear"), "{err}");
+
+        // The real writer refuses before creating snapshots or a ledger row.
+        let vault = std::env::temp_dir().join(format!("pops-fork-{}", uuid::Uuid::new_v4()));
+        assert!(audit_browser_record(&conn, &vault, "report", "r1", "{}", "REPORT_SAVED").is_err());
+        assert_eq!(ledger_rows(&conn), before);
+        assert!(!vault.join("browser_records").exists());
+    }
+
+    #[test]
+    fn append_refuses_chain_with_missing_predecessor() {
+        let conn = single_clock_ledger(4);
+        conn.execute("DELETE FROM audit_ledger WHERE id = 'row-1'", []).unwrap();
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("2 root(s)"), "{err}");
+    }
+
+    #[test]
+    fn append_continues_linear_chain_and_ignores_pre_link_legacy_rows() {
+        let empty = init_db(":memory:");
+        assert_eq!(get_previous_ledger_hash(&empty).unwrap(), None);
+
+        let conn = init_db(":memory:");
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json)
+             VALUES ('legacy', 'rec-l', 'REPORT_SAVED', 'p', 'p', '2026-01-01T00:00:00+00:00', '{}')",
+            [],
+        )
+        .unwrap();
+        let first = append_ledger_row(&conn, 0, "2026-10-01T10:00:00+00:00");
+        let second = append_ledger_row(&conn, 1, "2026-09-01T10:00:00+00:00"); // older clock, still links to the tip
+        let prev: Option<String> = conn.query_row("SELECT previous_ledger_hash FROM audit_ledger WHERE id = 'row-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(prev.as_deref(), Some(first.as_str()));
+        assert_eq!(get_previous_ledger_hash(&conn).unwrap().as_deref(), Some(second.as_str()));
     }
 
     #[test]
