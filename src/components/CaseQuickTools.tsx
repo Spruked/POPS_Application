@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { sealCameraPhoto } from '../utils/evidenceCapture';
 import { invoke } from '@tauri-apps/api/core';
-import { CalendarClock, FileDown, Zap, UserX } from 'lucide-react';
+import { CalendarClock, Camera, FileDown, X, Zap, UserX } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate } from '../utils/helpers';
 import type { Evidence, Incident, OperationalRecord } from '../types';
@@ -72,28 +73,58 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [preview, setPreview] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  function pickPhoto(file: File | undefined) {
+    if (!file) return;
+    if (preview) URL.revokeObjectURL(preview);
+    setPhoto(file);
+    setPreview(URL.createObjectURL(file));
+  }
+
+  function clearPhoto() {
+    if (preview) URL.revokeObjectURL(preview);
+    setPhoto(null);
+    setPreview('');
+    if (fileRef.current) fileRef.current.value = '';
+  }
 
   async function save() {
-    if (!note.trim()) return;
+    if (!note.trim() && !photo) return;
     setSaving(true);
     const now = new Date();
     const stamp = now.toISOString();
+    let photoLine = '';
+    try {
+      if (photo) {
+        const sealed = await sealCameraPhoto(photo, true);
+        photoLine = `\n\nPhoto: ${sealed.evidence.id} (SHA-256 ${sealed.evidence.sha256}, integrity ${sealed.integrity})`;
+      }
+    } catch (e) {
+      setStatus(`Photo could not be sealed: ${e}`);
+      setSaving(false);
+      return;
+    }
+    const text = (note.trim() || 'Photo logged') + photoLine;
     const item: Evidence = {
       id: generateId(),
       caseId: 'primary',
       type: 'other',
       title: `Quick log – ${now.toLocaleString()}`,
-      description: note.trim(),
+      description: text,
       date: stamp.split('T')[0],
-      sha256: await sha256(`${stamp}\n${note.trim()}`),
-      tags: ['quick-log', 'incident'],
+      sha256: await sha256(`${stamp}\n${text}`),
+      tags: photo ? ['quick-log', 'incident', 'photo-attached'] : ['quick-log', 'incident'],
       sourceDescription: `Quick incident log recorded in POPS at ${stamp}. Text sealed with SHA-256.`,
       createdAt: stamp,
     } as Evidence;
     try {
       await invoke('save_evidence', { item });
       setNote('');
-      setStatus(`Logged and sealed in the Evidence Vault at ${now.toLocaleTimeString()}`);
+      clearPhoto();
+      setStatus(`Logged${photoLine ? ' with photo' : ''} and sealed in the Evidence Vault at ${now.toLocaleTimeString()}`);
       show('Logged and sealed in the Evidence Vault');
       onSaved?.();
     } catch (e) {
@@ -116,9 +147,21 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
         placeholder="What happened? Time is recorded automatically."
         style={{ width: '100%', minHeight: 70, marginBottom: 10 }}
       />
-      <button data-testid="quick-incident-save" className="btn btn-primary" style={{ width: '100%', minHeight: 44 }} disabled={saving || !note.trim()} onClick={save}>
-        <Zap size={16} /> {saving ? 'Saving…' : 'Log Now'}
-      </button>
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} data-testid="quick-incident-file" onChange={e => pickPhoto(e.target.files?.[0])} />
+      {preview && (
+        <div style={{ position: 'relative', marginBottom: 10 }}>
+          <img src={preview} alt="Attached" data-testid="quick-incident-preview" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 10 }} />
+          <button type="button" className="btn btn-ghost btn-sm" aria-label="Remove photo" onClick={clearPhoto} style={{ position: 'absolute', top: 6, right: 6, minWidth: 36, minHeight: 36 }}><X size={16} /></button>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button type="button" data-testid="quick-incident-photo" className="btn btn-ghost" style={{ minHeight: 44 }} disabled={saving} onClick={() => fileRef.current?.click()}>
+          <Camera size={16} /> {photo ? 'Retake' : 'Photo'}
+        </button>
+        <button data-testid="quick-incident-save" className="btn btn-primary" style={{ flex: 1, minHeight: 44 }} disabled={saving || (!note.trim() && !photo)} onClick={save}>
+          <Zap size={16} /> {saving ? 'Saving…' : 'Log Now'}
+        </button>
+      </div>
       {status && <div data-testid="quick-incident-status" style={{ marginTop: 8, fontSize: 13, color: 'var(--text-muted)' }}>{status}</div>}
     </div>
   );
