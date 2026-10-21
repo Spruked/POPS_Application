@@ -31,7 +31,7 @@ export default function MobileNav({ currentPage, onNavigate, onOpenMenu, onOpenA
         <button type="button" className="mobile-topbar-button" onClick={onOpenMenu} aria-label="Open navigation">
           <Menu size={20} />
         </button>
-        <img src="/popsbadge.png" alt="" aria-hidden="true" className="mobile-topbar-logo" />
+        <img src={`${import.meta.env.BASE_URL}popsbadge.png`} alt="" aria-hidden="true" className="mobile-topbar-logo" />
         <div className="mobile-topbar-title">
           <span>{current?.section && current.section !== current.title ? current.section : 'P.O.P.S.'}</span>
           <strong>{current?.title || 'Case Command'}</strong>

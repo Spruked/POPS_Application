@@ -603,3 +603,40 @@
 .pops-reminder-banner-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 14px; border-radius: 12px; background: #2a0f12; border: 1px solid #ef4444; color: #fde8e8; box-shadow: 0 10px 30px rgba(0,0,0,.45); font-size: 14px; line-height: 1.45; }
 .pops-reminder-banner-row span { flex: 1 1 220px; }
 .pops-reminder-banner-row .btn { min-height: 40px; }
+
+/* Phone readability pass: tighter cards, readable calendar, scrollable tables, single-column forms. */
+@media (max-width: 760px) {
+  .main-content { padding-left: 10px !important; padding-right: 10px !important; }
+  .card { padding: 14px !important; border-radius: 14px; }
+  .page-header h2 { font-size: 22px; }
+  .page-header p { font-size: 13px; }
+  .page-header[style] { flex-wrap: wrap; }
+
+  .viscal-toolbar { flex-wrap: wrap; gap: 8px; }
+  .viscal-toolbar h3, .viscal-toolbar strong { font-size: 16px; }
+  .viscal-add { margin-left: auto; }
+  .viscal-grid-head, .viscal-grid { gap: 4px !important; }
+  .viscal-grid-head > * { font-size: 11px; text-align: center; }
+  .viscal-day {
+    min-height: 46px !important;
+    padding: 4px 2px !important;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .viscal-day-num { font-size: 15px; font-weight: 600; }
+  .viscal-day-meta { font-size: 0 !important; height: 8px; }
+  .viscal-day-meta.has-records::after {
+    content: ''; display: block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--trust-blue, #3b82f6); margin: 2px auto 0;
+  }
+
+  .table-container { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -14px; padding: 0 14px; }
+  .table-container table { min-width: 560px; font-size: 13px; }
+  .table-container th, .table-container td { padding: 10px 8px; }
+
+  .form-grid { grid-template-columns: 1fr !important; }
+  .form-group input, .form-group select, .form-group textarea { font-size: 16px; min-height: 44px; }
+
+  .stats-grid { grid-template-columns: 1fr 1fr !important; gap: 10px; }
+  .timeline-content h4 { font-size: 14px; word-break: break-word; }
+  .badge { white-space: nowrap; }
+}

@@ -310,7 +310,7 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
             <button className="pops-header-button" type="button" onClick={() => setDockState("closed")} title="Close chat assistant" aria-label="Close chat assistant"><X size={17} /></button>
             <img
               className="pops-presence-orb"
-              src="/orb/skins/average_dadblkleatherjacket.png"
+              src={`${import.meta.env.BASE_URL}orb/skins/average_dadblkleatherjacket.png`}
               alt=""
               aria-hidden="true"
               draggable={false}

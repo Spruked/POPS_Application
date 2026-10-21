@@ -4,7 +4,7 @@ export default function Declaration() {
   return (
     <div className="formal-doc-page">
       <div className="formal-doc-crest">
-        <img src="/popsbadge.png" alt="POPS logo" />
+        <img src={`${import.meta.env.BASE_URL}popsbadge.png`} alt="POPS logo" />
       </div>
 
       <div className="formal-doc">

@@ -216,7 +216,7 @@ export default function Sidebar({ currentPage, onNavigate: navigate, mobileOpen 
     <aside className={`sidebar ${mobileOpen ? 'sidebar-mobile-open' : ''}`} aria-label="POPS navigation">
       <div className="sidebar-header">
         <div className="orb-brand">
-          <img src="/popsbadge.png" alt="POPS logo" className="orb-logo" />
+          <img src={`${import.meta.env.BASE_URL}popsbadge.png`} alt="POPS logo" className="orb-logo" />
           <div className="orb-brand-text">
             <h1>P.O.P.S.</h1>
             <span>Case Command</span>

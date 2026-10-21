@@ -28,7 +28,7 @@ export default function AboutMission() {
       </div>
 
       <section className="mission-hero-card">
-        <img src="/popsbadge.png" alt="POPS logo" />
+        <img src={`${import.meta.env.BASE_URL}popsbadge.png`} alt="POPS logo" />
         <div>
           <span className="mission-kicker">The First Order of Protection</span>
           <h1>Proof of Presence</h1>

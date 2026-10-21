@@ -54,7 +54,7 @@ export default function SidebarRefined({ currentPage, onNavigate }: { currentPag
   const matches = (section: NavSection) => section.page === currentPage || section.items?.some((item) => item.page === currentPage);
 
   return <aside className="sidebar">
-    <div className="sidebar-header"><div className="orb-brand"><img src="/popsbadge.png" alt="POPS logo" className="orb-logo" /><div className="orb-brand-text"><h1>P.O.P.S.</h1><span>Case Command</span></div></div></div>
+    <div className="sidebar-header"><div className="orb-brand"><img src={`${import.meta.env.BASE_URL}popsbadge.png`} alt="POPS logo" className="orb-logo" /><div className="orb-brand-text"><h1>P.O.P.S.</h1><span>Case Command</span></div></div></div>
     <nav className="sidebar-nav">
       {sections.map((section) => {
         const Icon = section.icon;
