@@ -288,8 +288,21 @@ export function startReminderRuntime(onDue: (slots: ReminderSlot[]) => void, onT
       /* backend unavailable (browser dev) */
     }
   };
+  const autoSync = async () => {
+    const caps = await getPlatformCapabilities();
+    if (!caps.mobile) return;
+    try {
+      const out = await invoke<{ cancelNotificationIds: number[]; applied: number }>('sync_now');
+      await cancelIds(out.cancelNotificationIds);
+      if (out.applied) emitReminderChange();
+      await syncDeviceReminders();
+    } catch {
+      /* not paired or desktop unreachable: local reminders keep working */
+    }
+  };
   const onVisible = () => {
     if (document.visibilityState === 'visible') {
+      void autoSync();
       void checkZone();
       void syncDeviceReminders().catch(() => undefined);
       tick();
@@ -310,10 +323,13 @@ export function startReminderRuntime(onDue: (slots: ReminderSlot[]) => void, onT
   void syncDeviceReminders().catch(() => undefined);
   tick();
   const timer = window.setInterval(tick, 30_000);
+  void autoSync();
+  const syncTimer = window.setInterval(() => void autoSync(), 5 * 60_000);
   document.addEventListener('visibilitychange', onVisible);
   return () => {
     stopped = true;
     window.clearInterval(timer);
+    window.clearInterval(syncTimer);
     document.removeEventListener('visibilitychange', onVisible);
     unlisten?.();
   };

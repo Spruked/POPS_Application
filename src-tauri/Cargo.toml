@@ -27,6 +27,11 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 chrono = { version = "0.4", features = ["serde"] }
 # Court-local time zones for reminders (bundled IANA database, works offline on mobile)
 chrono-tz = "0.10"
+# Desktop <-> phone sync: authenticated encryption + pairing secrets
+chacha20poly1305 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 sha2 = "0.10"
 hex = "0.4"

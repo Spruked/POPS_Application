@@ -417,6 +417,79 @@ fn open_slots(conn: &rusqlite::Connection, appointment_id: &str) -> Result<Vec<R
     )
 }
 
+/// Writes an appointment row, supersedes its open slots and (if confirmed) builds new ones.
+fn write_and_schedule(conn: &rusqlite::Connection, appt: &ReminderAppointment, start_utc: DateTime<Utc>, settings: &ReminderSettings, now: DateTime<Utc>) -> Result<(Vec<ReminderSlot>, Vec<i32>), String> {
+    conn.execute(
+        &format!("INSERT OR REPLACE INTO reminder_appointments ({APPT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
+        rusqlite::params![
+            appt.id, appt.case_id, appt.kind, appt.title, appt.location, appt.notes, appt.local_start, appt.time_zone,
+            appt.start_utc, appt.critical as i64, serde_json::to_string(&appt.offsets).map_err(|e| e.to_string())?,
+            appt.status, appt.source, appt.linked_record_id, appt.revision, appt.record_hash, appt.created_at, appt.updated_at
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+
+    // Any earlier revision's open slots are superseded, never silently deleted.
+    let mut cancel_ids = Vec::new();
+    for slot in open_slots(conn, &appt.id)? {
+        set_slot_state(conn, &slot.id, "superseded", "appointment_revised")?;
+        cancel_ids.push(slot.notification_id);
+    }
+
+    let mut slots = Vec::new();
+    if appt.status == "confirmed" {
+        let escalation = if settings.escalation_enabled { settings.escalation_minutes.clone() } else { vec![] };
+        slots = build_slots(appt, start_utc, &escalation, now);
+        for s in &slots {
+            conn.execute(
+                &format!("INSERT OR REPLACE INTO reminder_slots ({SLOT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"),
+                rusqlite::params![
+                    s.id, s.appointment_id, s.appointment_revision, s.slot_kind, s.parent_slot_id, s.offset_minutes,
+                    s.fire_at_utc, s.label, s.critical as i64, s.state, s.notification_id, s.acknowledged_at,
+                    s.ack_source, "computed", now.to_rfc3339()
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok((slots, cancel_ids))
+}
+
+/// Applies an appointment received from the paired device exactly as sent
+/// (same id, revision and hash), so both sides derive identical reminder slots.
+pub fn apply_remote_appointment(conn: &rusqlite::Connection, vault: &Path, appt: &ReminderAppointment, peer: &str) -> Result<SaveResult, String> {
+    let (start_utc, _) = local_to_utc(&appt.local_start, &appt.time_zone)?;
+    if appointment_hash(appt) != appt.record_hash {
+        return Err(format!("Rejected {}: record hash does not match its contents", appt.id));
+    }
+    let settings = load_settings(conn);
+    let (slots, cancel_ids) = write_and_schedule(conn, appt, start_utc, &settings, Utc::now())?;
+    let payload = serde_json::json!({ "appointment": appt, "peer": peer, "slots": &slots });
+    audit(conn, vault, "reminder_appointment", &appt.id, &payload, "REMINDER_APPOINTMENT_SYNCED")?;
+    Ok(SaveResult { appointment: appt.clone(), slots, cancel_notification_ids: cancel_ids, warnings: vec![] })
+}
+
+pub fn appointment_by_id(conn: &rusqlite::Connection, id: &str) -> Result<Option<ReminderAppointment>, String> {
+    get_appointment(conn, id)
+}
+
+pub fn appointments_updated_since(conn: &rusqlite::Connection, since: Option<&str>) -> Result<Vec<ReminderAppointment>, String> {
+    let sql = format!("SELECT {APPT_COLS} FROM reminder_appointments WHERE status != 'draft' AND updated_at > ?1 ORDER BY updated_at");
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([since.unwrap_or("")], row_to_appointment).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+pub fn slots_acknowledged_since(conn: &rusqlite::Connection, since: Option<&str>) -> Result<Vec<ReminderSlot>, String> {
+    let since = since.unwrap_or("");
+    slots_where(conn, "WHERE state = 'acknowledged' AND acknowledged_at > ?1 AND COALESCE(ack_source,'') NOT LIKE 'sync:%'", &[&since])
+}
+
+pub fn slot_is_open(conn: &rusqlite::Connection, id: &str) -> bool {
+    get_slot(conn, id).map(|s| ["pending", "os_scheduled", "schedule_failed", "fired"].contains(&s.state.as_str())).unwrap_or(false)
+}
+
 // ─── Commands ──────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -485,39 +558,7 @@ pub fn save_appointment_impl(conn: &rusqlite::Connection, vault: &Path, item: Re
     appt.updated_at = now.to_rfc3339();
     appt.record_hash = appointment_hash(&appt);
 
-    conn.execute(
-        &format!("INSERT OR REPLACE INTO reminder_appointments ({APPT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)"),
-        rusqlite::params![
-            appt.id, appt.case_id, appt.kind, appt.title, appt.location, appt.notes, appt.local_start, appt.time_zone,
-            appt.start_utc, appt.critical as i64, serde_json::to_string(&appt.offsets).map_err(|e| e.to_string())?,
-            appt.status, appt.source, appt.linked_record_id, appt.revision, appt.record_hash, appt.created_at, appt.updated_at
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // Any earlier revision's open slots are superseded, never silently deleted.
-    let mut cancel_ids = Vec::new();
-    for slot in open_slots(&conn, &appt.id)? {
-        set_slot_state(&conn, &slot.id, "superseded", "appointment_revised")?;
-        cancel_ids.push(slot.notification_id);
-    }
-
-    let mut slots = Vec::new();
-    if appt.status == "confirmed" {
-        let escalation = if settings.escalation_enabled { settings.escalation_minutes.clone() } else { vec![] };
-        slots = build_slots(&appt, start_utc, &escalation, now);
-        for s in &slots {
-            conn.execute(
-                &format!("INSERT OR REPLACE INTO reminder_slots ({SLOT_COLS}) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)"),
-                rusqlite::params![
-                    s.id, s.appointment_id, s.appointment_revision, s.slot_kind, s.parent_slot_id, s.offset_minutes,
-                    s.fire_at_utc, s.label, s.critical as i64, s.state, s.notification_id, s.acknowledged_at,
-                    s.ack_source, "computed", now.to_rfc3339()
-                ],
-            )
-            .map_err(|e| e.to_string())?;
-        }
-    }
+    let (slots, cancel_ids) = write_and_schedule(conn, &appt, start_utc, &settings, now)?;
 
     let action = match (previous.is_some(), appt.status.as_str()) {
         (_, "cancelled") => "REMINDER_APPOINTMENT_CANCELLED",

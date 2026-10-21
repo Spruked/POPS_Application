@@ -1,5 +1,7 @@
 mod local_agent;
 mod reminders;
+mod sync;
+mod google_calendar;
 mod vault_transfer;
 #[path = "mcp/research_server.rs"]
 mod research_server;
@@ -602,6 +604,8 @@ fn init_db(path: &str) -> rusqlite::Connection {
         [],
     );
     reminders::init_reminder_tables(&conn).expect("init reminder tables");
+    sync::init_sync_tables(&conn).expect("init sync tables");
+    google_calendar::init_gcal_tables(&conn).expect("init google calendar tables");
     conn
 }
 
@@ -5125,6 +5129,19 @@ pub fn run() {
             reminders::acknowledge_reminder,
             reminders::get_due_reminders,
             reminders::record_device_time_zone,
+            sync::sync_start_server,
+            sync::sync_create_pairing,
+            sync::sync_join_pairing,
+            sync::sync_list_peers,
+            sync::sync_revoke_peer,
+            sync::sync_now,
+            sync::sync_get_conflicts,
+            sync::sync_resolve_conflict,
+            google_calendar::gcal_status,
+            google_calendar::gcal_configure,
+            google_calendar::gcal_connect,
+            google_calendar::gcal_disconnect,
+            google_calendar::gcal_sync,
             record_chain_of_custody,
             export_pdf,
             export_timeline,
