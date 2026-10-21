@@ -446,6 +446,29 @@ mod tests {
     }
 
     #[test]
+    fn http_request_parsing_over_a_real_socket() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let body = "x".repeat(20_000); // larger than one read chunk
+        let sent = body.clone();
+        let client = std::thread::spawn(move || {
+            let mut s = TcpStream::connect(addr).unwrap();
+            write!(s, "POST {PATH} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{sent}", sent.len()).unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        });
+        let (mut stream, _) = listener.accept().unwrap();
+        let (line, got) = read_request(&mut stream).unwrap();
+        assert!(line.starts_with(&format!("POST {PATH}")));
+        assert_eq!(got, body);
+        respond(&mut stream, "200 OK", "{\"ok\":true}");
+        drop(stream);
+        let reply = client.join().unwrap();
+        assert!(reply.starts_with("HTTP/1.1 200 OK") && reply.ends_with("{\"ok\":true}"));
+    }
+
+    #[test]
     fn sealed_messages_roundtrip_and_reject_tampering() {
         let secret = B64.encode([7u8; 32]);
         let sealed = seal("peer-1", &secret, b"hello").unwrap();
