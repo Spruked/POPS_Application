@@ -94,3 +94,24 @@ Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cove
 Add these secrets: `APPLE_DEVELOPMENT_TEAM` (the 10-character Team ID), `APPLE_API_ISSUER`, `APPLE_API_KEY` (the Key ID), and `APPLE_API_KEY_P8` (the contents of the .p8 file). Create the key in App Store Connect → Users and Access → Integrations → App Store Connect API with the App Manager role.
 
 Register the bundle ID `com.proofofpresence.app` in the Apple Developer portal. To upload builds to TestFlight automatically, set the repository variable `IOS_UPLOAD_TESTFLIGHT=true`.
+
+## Court & Appointment Reminders (Phase 1: local reminder engine)
+
+Case Calendar → **Reminders**. Code: `src-tauri/src/reminders.rs` (engine), `src/utils/reminderRuntime.ts` (device scheduling), `src/pages/Reminders.tsx`, `src/components/ReminderBanner.tsx`.
+
+- **Vault law:** tables `reminder_appointments`, `reminder_slots` and `reminder_settings` live in `Vault_System/database/proof_of_presence.db`. Every create, confirm, revise, cancel, schedule attempt, delivery and acknowledgment is mirrored to `browser_records/reminder_*` and chained into `audit_ledger`. Vault Transfer carries reminders to Android and iOS automatically.
+- **Court time zone:** the venue's wall-clock time and IANA zone (chrono-tz, bundled and offline) are stored with each appointment. Clock-change gaps are rejected; repeated hours warn.
+- **Default court sequence:** 7d, 3d, 24h, 3h, 1h before (adjustable per appointment and as a default). Court dates are always critical.
+- **Phone:** once you confirm an appointment, its reminders are handed to the OS scheduler (`Schedule.at`, allowed while idle), so they fire with POPS closed and with no internet. Android re-arms them after a reboot (the plugin's boot receiver). iOS allows at most 64 pending notifications, so POPS keeps the nearest 60 (court first) and refills them as earlier ones pass.
+- **Acknowledgment:** only the "Seen it" button (on the notification, the in-app banner or the Reminders page) counts. Delivery is never treated as acknowledgment.
+- **Escalation:** each critical reminder has follow-up alerts 10 and 30 minutes later. They're scheduled up front, so they work offline, and are cancelled once you tap "Seen it".
+- **Device time-zone change:** POPS detects it, records it in the audit ledger, shows a banner and re-syncs reminders.
+- **Revisions are never silent:** editing an appointment supersedes the old reminders (kept for the record) and cancels them on the device.
+- **Desktop:** reminders alert only while POPS is open (the notification plugin has no desktop scheduler).
+- **Android permissions (added in CI):** `USE_EXACT_ALARM` (Android 13+), `SCHEDULE_EXACT_ALARM` (Android 12, maxSdk 32), plus the plugin's `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED` and `WAKE_LOCK`. Play Console requires the exact-alarm declaration ("calendar / reminder app").
+- **Limits (shown in the app):** no phone app can guarantee that every alert is seen. Battery savers, Do Not Disturb, a phone that's switched off or notifications turned off can stop alerts.
+
+## Older devices
+
+- Minimum: Android 7.0 (API 24) and iOS 15 (Tauri v2 defaults). The CI emulator smoke test now runs on API 24 and API 33 and records the WebView version.
+- `index.html` checks for a Chrome 87+ web engine before POPS loads. On an outdated Android System WebView it shows "update Android System WebView" instead of a blank screen.

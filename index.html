@@ -9,6 +9,20 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Old Android System WebView guard: POPS is built for Chrome 87+ engines. -->
+    <script>
+      (function () {
+        var ok = true;
+        try { new Function("var a = {b: 1}; return a?.b ?? 0;")(); ok = typeof Promise.allSettled === "function" && typeof globalThis === "object"; } catch (e) { ok = false; }
+        if (ok) return;
+        document.getElementById("root").innerHTML =
+          '<div style="font-family:sans-serif;padding:32px 24px;color:#eef3ff;background:#070c17;min-height:100vh;box-sizing:border-box">' +
+          '<h2 style="color:#fbbf24">Please update your phone\'s web engine</h2>' +
+          '<p>POPS needs a newer version of <b>Android System WebView</b> (or Google Chrome) to run.</p>' +
+          '<p>Open the <b>Google Play Store</b>, search for <b>Android System WebView</b> and tap <b>Update</b>. Then reopen POPS.</p>' +
+          '<p style="opacity:.75">Your vault and records are not affected.</p></div>';
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

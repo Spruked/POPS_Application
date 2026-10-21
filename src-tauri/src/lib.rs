@@ -1,4 +1,5 @@
 mod local_agent;
+mod reminders;
 mod vault_transfer;
 #[path = "mcp/research_server.rs"]
 mod research_server;
@@ -600,6 +601,7 @@ fn init_db(path: &str) -> rusqlite::Connection {
         "CREATE INDEX IF NOT EXISTS idx_contact_research_contact ON contact_research_findings(contact_id, updated_at)",
         [],
     );
+    reminders::init_reminder_tables(&conn).expect("init reminder tables");
     conn
 }
 
@@ -5113,6 +5115,16 @@ pub fn run() {
             vault_transfer::export_vault_transfer,
             vault_transfer::inspect_vault_transfer,
             vault_transfer::restore_vault_transfer,
+            reminders::get_reminder_settings,
+            reminders::save_reminder_settings,
+            reminders::save_reminder_appointment,
+            reminders::cancel_reminder_appointment,
+            reminders::get_reminder_appointments,
+            reminders::get_reminder_slots,
+            reminders::record_reminder_event,
+            reminders::acknowledge_reminder,
+            reminders::get_due_reminders,
+            reminders::record_device_time_zone,
             record_chain_of_custody,
             export_pdf,
             export_timeline,

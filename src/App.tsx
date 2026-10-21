@@ -7,6 +7,8 @@ import MobileNav from "./components/MobileNav";
 import VaultTransfer from "./pages/VaultTransfer";
 import { useCompactViewport } from "./utils/platform";
 import ToastContainer from "./components/ToastContainer";
+import ReminderBanner from "./components/ReminderBanner";
+import Reminders from "./pages/Reminders";
 import PopsAssistant from "./components/PopsAssistant";
 import CaseOverview from "./pages/CaseOverview";
 import GlyphTrace from "./pages/GlyphTrace";
@@ -75,7 +77,7 @@ function App() {
     calendarAttorneyMeetings: <OperationalRecordsPage config={MODULE_CONFIGS.calendarAttorneyMeetings} />,
     calendarSupportDeadlines: <OperationalRecordsPage config={MODULE_CONFIGS.calendarSupportDeadlines} />,
     calendarRequiredContacts: <OperationalRecordsPage config={MODULE_CONFIGS.calendarRequiredContacts} />,
-    calendarReminders: <OperationalRecordsPage config={MODULE_CONFIGS.calendarReminders} />,
+    calendarReminders: <Reminders />,
     calendarFollowUps: <OperationalRecordsPage config={MODULE_CONFIGS.calendarFollowUps} />,
     legal: <CourtOrders />,
     childSupportLedger: <ChildSupportLedger />,
@@ -165,6 +167,7 @@ function App() {
       <main className="main-content pops-main-content">
         {pages[page] || <OperationalRecordsPage config={fallbackConfig} />}
       </main>
+      <ReminderBanner onOpen={() => setPage("calendarReminders")} />
       <ToastContainer toasts={toasts} />
       <PopsAssistant activePage={page} onNavigate={setPage} />
     </div>
