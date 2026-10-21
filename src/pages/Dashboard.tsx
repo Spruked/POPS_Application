@@ -1,6 +1,7 @@
 import { Shield, Gavel, AlertTriangle, FileText, Calendar, Activity, Zap, TrendingUp } from 'lucide-react';
 import { useEvidenceStore, useOrderStore, useViolationStore, useEventStore } from '../hooks/useStore';
 import { formatDate } from '../utils/helpers';
+import { CourtCountdown, QuickIncidentLog } from '../components/CaseQuickTools';
 
 export default function Dashboard() {
   const evidence = useEvidenceStore();
@@ -37,6 +38,9 @@ export default function Dashboard() {
         <h2>Dashboard</h2>
         <p>Overview of your case evidence, orders, and activity</p>
       </div>
+
+      <CourtCountdown />
+      <QuickIncidentLog onSaved={evidence.refresh} />
 
       {/* TPC Pipeline Status */}
       <div className="card" style={{ marginBottom: 20, padding: 18, display: 'flex', alignItems: 'center', gap: 16 }}>

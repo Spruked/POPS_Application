@@ -4,6 +4,7 @@ import { useReportStore, useEvidenceStore, useOrderStore, useViolationStore, use
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate, formatDateTime, downloadTextFile } from '../utils/helpers';
 import Modal from '../components/Modal';
+import { CasePdfExport, MissedVisitTracker } from '../components/CaseQuickTools';
 import { FullCaseBundleExport } from '../components/FullCaseBundleExport';
 import type { Report } from '../types';
 import { fetchEvidenceLocations, formatEvidenceLocation, type EvidenceLocation } from '../utils/evidenceLocation';
@@ -211,6 +212,9 @@ COURT ORDERS:
         <h2>Reports</h2>
         <p>Generate reviewable Markdown reports and complete Vault-backed case bundles.</p>
       </div>
+
+      <CasePdfExport />
+      <MissedVisitTracker />
 
       <FullCaseBundleExport />
 
