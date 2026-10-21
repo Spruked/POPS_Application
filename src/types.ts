@@ -438,6 +438,7 @@ export type Page =
   | 'diagnostics'
   | 'settingsDataBackup'
   | 'settingsVaultTransfer'
+  | 'settingsDeviceSync'
   | 'settingsSecurity'
   | 'settingsLocalStorage'
   | 'settingsPreferences'

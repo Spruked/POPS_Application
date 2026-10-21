@@ -9,6 +9,7 @@ import { useCompactViewport } from "./utils/platform";
 import ToastContainer from "./components/ToastContainer";
 import ReminderBanner from "./components/ReminderBanner";
 import Reminders from "./pages/Reminders";
+import DeviceSync from "./pages/DeviceSync";
 import PopsAssistant from "./components/PopsAssistant";
 import CaseOverview from "./pages/CaseOverview";
 import GlyphTrace from "./pages/GlyphTrace";
@@ -104,6 +105,7 @@ function App() {
     diagnostics: <Diagnostics />,
     settingsDataBackup: <OperationalRecordsPage config={MODULE_CONFIGS.settingsDataBackup} />,
     settingsVaultTransfer: <VaultTransfer />,
+    settingsDeviceSync: <DeviceSync />,
     settingsSecurity: <OperationalRecordsPage config={MODULE_CONFIGS.settingsSecurity} />,
     settingsLocalStorage: <Settings />,
     settingsPreferences: <OperationalRecordsPage config={MODULE_CONFIGS.settingsPreferences} />,

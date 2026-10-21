@@ -157,6 +157,7 @@ const navSections: NavSection[] = [
       { page: 'diagnostics', label: 'Diagnostics' },
       { page: 'settingsDataBackup', label: 'Data Backup' },
       { page: 'settingsVaultTransfer', label: 'Vault Transfer' },
+      { page: 'settingsDeviceSync', label: 'Device Sync' },
       { page: 'settingsSecurity', label: 'Security' },
       { page: 'settingsLocalStorage', label: 'Local Storage' },
       { page: 'settingsPreferences', label: 'Preferences' },

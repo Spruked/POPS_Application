@@ -115,3 +115,34 @@ Case Calendar → **Reminders**. Code: `src-tauri/src/reminders.rs` (engine), `s
 
 - Minimum: Android 7.0 (API 24) and iOS 15 (Tauri v2 defaults). The CI emulator smoke test now runs on API 24 and API 33 and records the WebView version.
 - `index.html` checks for a Chrome 87+ web engine before POPS loads. On an outdated Android System WebView it shows "update Android System WebView" instead of a blank screen.
+
+## Device Sync (Phase 2: desktop ↔ phone)
+
+Settings → **Device Sync**. Code: `src-tauri/src/sync.rs`, `src/pages/DeviceSync.tsx`.
+
+- **Desktop is authoritative.** Phones send their new appointments, edits and "Seen it" confirmations. The desktop returns its schedule.
+- **Pairing:** on the desktop, Create pairing code; on the phone, paste the `POPS1.…` code. Each phone gets its own 256-bit secret and can be revoked.
+- **Security:** every message is end-to-end encrypted and authenticated (ChaCha20-Poly1305, key derived from the pairing secret), bound to the device id and a timestamp (5-minute replay window). Wrong or revoked devices are refused.
+- **Conflicts are never overwritten:** if both sides changed the same appointment since the last agreed version, a conflict is stored on that side and shown on Device Sync with both versions. You pick which one to keep, and the decision syncs on the next exchange.
+- **When:** phones sync on app open, when returning to the app, every 5 minutes while open, and with Sync now. Reminders already scheduled on the phone keep working with no desktop or internet.
+- **Same Wi-Fi:** the desktop listens on port **47615** while POPS is open (allow it through Windows Firewall).
+- **Away from home (secure gateway):** add an ingress rule to your existing Cloudflare Tunnel (`spruked-prod`) **without touching the website routes**, for example:
+  ```yaml
+  - hostname: sync.popsproof.com
+    service: http://<windows-host-ip-from-WSL>:47615   # e.g. the WSL gateway 172.19.80.1
+  ```
+  Then enter `https://sync.popsproof.com` as the secure gateway address before creating the pairing code. The path `/pops-sync/v1/exchange` is the only endpoint, and it accepts only encrypted, paired messages.
+- **Audit:** pairing, every exchange, conflicts and resolutions are recorded in the audit ledger (`sync_event`).
+
+## Google Calendar + free email reminders (desktop)
+
+Settings → Device Sync → **Google Calendar**. Code: `src-tauri/src/google_calendar.rs`.
+
+1. Google Cloud Console (free) → create a project → enable **Google Calendar API** → OAuth consent screen (External; add yourself as a test user) → Credentials → **OAuth client ID → Desktop app**. Copy the client ID.
+2. In POPS Desktop, paste the client ID → **Connect Google Calendar** → approve in the browser (PKCE, loopback on 127.0.0.1).
+3. **Sync to Google** copies confirmed appointments (court time zone kept; up to 5 popup reminders from your intervals) and removes cancelled ones.
+- **Email reminders:** tick "Also send me email reminders". Google Calendar itself emails you 24 hours before. No email service and no fees.
+- **Privacy:** only the title, location and time are sent. Case notes never are. The client ID and Google sign-in token are kept in the app config folder, **not in the vault**, so Vault Transfer never copies them.
+- **Never overwritten from Google:** if an event was moved in Google Calendar, POPS reports it and keeps its own time.
+- **Phones:** events show up in the phone's Google Calendar app automatically. POPS on the phone gets the schedule through Device Sync.
+- **Before public release:** Google requires OAuth app verification for the `calendar.events` scope once you go beyond 100 test users.
