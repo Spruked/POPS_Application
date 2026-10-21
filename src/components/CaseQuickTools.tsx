@@ -71,6 +71,7 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
   const { show } = useToast();
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState('');
 
   async function save() {
     if (!note.trim()) return;
@@ -92,10 +93,11 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
     try {
       await invoke('save_evidence', { item });
       setNote('');
+      setStatus(`Logged and sealed in the Evidence Vault at ${now.toLocaleTimeString()}`);
       show('Logged and sealed in the Evidence Vault');
       onSaved?.();
     } catch (e) {
-      show(`Could not save: ${e}`);
+      setStatus(`Could not save: ${e}`);
     } finally {
       setSaving(false);
     }
@@ -117,6 +119,7 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
       <button data-testid="quick-incident-save" className="btn btn-primary" style={{ width: '100%', minHeight: 44 }} disabled={saving || !note.trim()} onClick={save}>
         <Zap size={16} /> {saving ? 'Saving…' : 'Log Now'}
       </button>
+      {status && <div data-testid="quick-incident-status" style={{ marginTop: 8, fontSize: 13, color: 'var(--text-muted)' }}>{status}</div>}
     </div>
   );
 }
