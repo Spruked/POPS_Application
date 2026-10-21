@@ -1809,13 +1809,21 @@ fn court_safe_incident_summary(input: &IncidentInput) -> String {
     )
 }
 
+/// The chain tip: the hashed entry that no other entry links to as its previous hash.
+/// Chain order comes from the hash links, not wall-clock `created_at`, so records moved
+/// between devices with different clocks (Vault Transfer) still append to the true tip.
+/// `created_at` only breaks a tie when a ledger is already ambiguous (legacy behaviour).
 fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT ledger_entry_hash
-             FROM audit_ledger
-             WHERE ledger_entry_hash IS NOT NULL
-             ORDER BY created_at DESC, id DESC
+            "SELECT a.ledger_entry_hash
+             FROM audit_ledger a
+             WHERE a.ledger_entry_hash IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM audit_ledger b
+                   WHERE b.previous_ledger_hash = a.ledger_entry_hash
+               )
+             ORDER BY a.created_at DESC, a.id DESC
              LIMIT 1",
         )
         .map_err(|e| e.to_string())?;
@@ -4368,6 +4376,10 @@ fn get_audit_ledger(db: State<DbConn>) -> Result<Vec<AuditLedgerItem>, String> {
 #[tauri::command]
 fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+    verify_audit_ledger_conn(&conn)
+}
+
+fn verify_audit_ledger_conn(conn: &rusqlite::Connection) -> Result<LedgerIntegrityStatus, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, record_id, action, COALESCE(payload_hash, hash), created_at,
@@ -4390,10 +4402,36 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
             ))
         })
         .map_err(|e| e.to_string())?;
+    let rows: Vec<_> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
 
+    // Walk the chain by its hash links (genesis -> tip), independent of wall-clock order.
+    // `created_at` order is kept only to make breach reporting deterministic.
+    let mut successors: std::collections::HashMap<Option<String>, Vec<usize>> = std::collections::HashMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        successors.entry(row.6.clone()).or_default().push(index);
+    }
+    let breach = |checked_rows: usize, id: &str| LedgerIntegrityStatus {
+        status: "BREACH".to_string(),
+        checked_rows,
+        breach_row_id: Some(id.to_string()),
+        message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
+    };
+
+    let mut visited = vec![false; rows.len()];
     let mut previous: Option<String> = None;
     let mut checked_rows = 0usize;
-    for row in rows {
+    loop {
+        let next = successors.get(&previous).map(Vec::as_slice).unwrap_or(&[]);
+        let index = match next {
+            [] => break,
+            [only] => *only,
+            // Two entries claim the same predecessor: the chain was forked or spliced.
+            [_, second, ..] => return Ok(breach(checked_rows, &rows[*second].0)),
+        };
+        if visited[index] {
+            return Ok(breach(checked_rows, &rows[index].0));
+        }
+        visited[index] = true;
         let (
             id,
             record_id,
@@ -4401,18 +4439,9 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
             payload_hash,
             created_at,
             metadata_json,
-            previous_ledger_hash,
+            _previous_ledger_hash,
             ledger_hash,
-        ) = row.map_err(|e| e.to_string())?;
-
-        if previous_ledger_hash != previous {
-            return Ok(LedgerIntegrityStatus {
-                status: "BREACH".to_string(),
-                checked_rows,
-                breach_row_id: Some(id),
-                message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
-            });
-        }
+        ) = &rows[index];
 
         let expected_hash = ledger_entry_hash(
             &record_id,
@@ -4424,16 +4453,16 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
         );
 
         if ledger_hash.as_deref() != Some(expected_hash.as_str()) {
-            return Ok(LedgerIntegrityStatus {
-                status: "BREACH".to_string(),
-                checked_rows,
-                breach_row_id: Some(id),
-                message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
-            });
+            return Ok(breach(checked_rows, id));
         }
 
         previous = Some(expected_hash);
         checked_rows += 1;
+    }
+
+    // Any entry not reachable from genesis (missing link, deleted predecessor) is a breach.
+    if let Some(orphan) = rows.iter().zip(&visited).find(|(_, seen)| !**seen) {
+        return Ok(breach(checked_rows, &orphan.0 .0));
     }
 
     Ok(LedgerIntegrityStatus {
@@ -4947,6 +4976,105 @@ async fn local_agent_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Appends a ledger row exactly as the app's writers do, with an explicit timestamp.
+    fn append_ledger_row(conn: &rusqlite::Connection, n: usize, created_at: &str) -> String {
+        let record_id = format!("rec-{n}");
+        let payload_hash = sha256_hex(record_id.as_bytes());
+        let metadata = format!("{{\"n\":{n}}}");
+        let previous = get_previous_ledger_hash(conn).unwrap();
+        let entry = ledger_entry_hash(&record_id, "REPORT_SAVED", &payload_hash, created_at, &metadata, previous.as_deref());
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES (?1, ?2, 'REPORT_SAVED', ?3, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![format!("row-{n}"), record_id, payload_hash, created_at, metadata, previous, entry],
+        )
+        .unwrap();
+        entry
+    }
+
+    fn single_clock_ledger(rows: usize) -> rusqlite::Connection {
+        let conn = init_db(":memory:");
+        for n in 0..rows {
+            append_ledger_row(&conn, n, &format!("2026-10-{:02}T10:00:00+00:00", n + 1));
+        }
+        conn
+    }
+
+    /// The pre-fix verifier (wall-clock order), kept here only as a reference.
+    fn legacy_verify(conn: &rusqlite::Connection) -> (bool, usize) {
+        let rows: Vec<(String, String, String, String, String, Option<String>, Option<String>)> = conn
+            .prepare(
+                "SELECT record_id, action, COALESCE(payload_hash, hash), created_at, metadata_json, previous_ledger_hash, ledger_entry_hash
+                 FROM audit_ledger ORDER BY created_at ASC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut previous: Option<String> = None;
+        for (checked, (rec, action, payload, created, meta, prev, hash)) in rows.iter().enumerate() {
+            let expected = ledger_entry_hash(rec, action, payload, created, meta, previous.as_deref());
+            if *prev != previous || hash.as_deref() != Some(expected.as_str()) {
+                return (false, checked);
+            }
+            previous = Some(expected);
+        }
+        (true, rows.len())
+    }
+
+    #[test]
+    fn ledger_link_walk_matches_legacy_verification_for_single_clock_history() {
+        let conn = single_clock_ledger(6);
+        let status = verify_audit_ledger_conn(&conn).unwrap();
+        assert_eq!(legacy_verify(&conn), (true, 6));
+        assert_eq!((status.status.as_str(), status.checked_rows), ("VERIFIED", 6));
+        assert_eq!(verify_audit_ledger_conn(&init_db(":memory:")).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn ledger_link_walk_still_detects_tampering_deletion_forks_and_unhashed_rows() {
+        let status = |conn: &rusqlite::Connection| {
+            let s = verify_audit_ledger_conn(conn).unwrap();
+            (s.status, s.breach_row_id)
+        };
+
+        let tampered = single_clock_ledger(4);
+        tampered.execute("UPDATE audit_ledger SET metadata_json = '{\"n\":99}' WHERE id = 'row-2'", []).unwrap();
+        assert_eq!(status(&tampered), ("BREACH".into(), Some("row-2".into())));
+
+        let retimed = single_clock_ledger(4);
+        retimed.execute("UPDATE audit_ledger SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = 'row-3'", []).unwrap();
+        assert_eq!(status(&retimed), ("BREACH".into(), Some("row-3".into())));
+
+        let deleted = single_clock_ledger(4);
+        deleted.execute("DELETE FROM audit_ledger WHERE id = 'row-1'", []).unwrap();
+        assert_eq!(status(&deleted).0, "BREACH");
+
+        let forked = single_clock_ledger(3);
+        let genesis: String = forked.query_row("SELECT ledger_entry_hash FROM audit_ledger WHERE id = 'row-0'", [], |r| r.get(0)).unwrap();
+        let entry = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-12-01T00:00:00+00:00", "{}", Some(&genesis));
+        forked
+            .execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                 VALUES ('row-x', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?1, ?2)",
+                rusqlite::params![genesis, entry],
+            )
+            .unwrap();
+        assert_eq!(status(&forked).0, "BREACH");
+
+        let unhashed = single_clock_ledger(2);
+        unhashed
+            .execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json)
+                 VALUES ('legacy', 'rec-l', 'REPORT_SAVED', 'p', 'p', '2026-11-01T00:00:00+00:00', '{}')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(status(&unhashed).0, "BREACH");
+        assert_eq!(legacy_verify(&unhashed).0, false);
+    }
 
     #[test]
     fn capture_locations_include_only_gps_rows() {
