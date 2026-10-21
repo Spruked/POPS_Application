@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { sealCameraPhoto } from '../utils/evidenceCapture';
 import { invoke } from '@tauri-apps/api/core';
-import { CalendarClock, Camera, FileDown, X, Zap, UserX } from 'lucide-react';
+import { CalendarClock, Camera, FileDown, Image as ImageIcon, X, Zap, UserX } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate } from '../utils/helpers';
 import type { Evidence, Incident, OperationalRecord } from '../types';
@@ -74,11 +74,14 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState('');
   const [photo, setPhoto] = useState<File | null>(null);
+  const [fromGallery, setFromGallery] = useState(false);
+  const galleryRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
-  function pickPhoto(file: File | undefined) {
+  function pickPhoto(file: File | undefined, gallery: boolean) {
     if (!file) return;
+    setFromGallery(gallery);
     if (preview) URL.revokeObjectURL(preview);
     setPhoto(file);
     setPreview(URL.createObjectURL(file));
@@ -89,6 +92,7 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
     setPhoto(null);
     setPreview('');
     if (fileRef.current) fileRef.current.value = '';
+    if (galleryRef.current) galleryRef.current.value = '';
   }
 
   async function save() {
@@ -99,7 +103,7 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
     let photoLine = '';
     try {
       if (photo) {
-        const sealed = await sealCameraPhoto(photo, true);
+        const sealed = await sealCameraPhoto(photo, !fromGallery, fromGallery);
         photoLine = `\n\nPhoto: ${sealed.evidence.id} (SHA-256 ${sealed.evidence.sha256}, integrity ${sealed.integrity})`;
       }
     } catch (e) {
@@ -147,7 +151,8 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
         placeholder="What happened? Time is recorded automatically."
         style={{ width: '100%', minHeight: 70, marginBottom: 10 }}
       />
-      <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} data-testid="quick-incident-file" onChange={e => pickPhoto(e.target.files?.[0])} />
+      <input ref={fileRef} type="file" accept="image/*" capture="environment" style={{ display: 'none' }} data-testid="quick-incident-file" onChange={e => pickPhoto(e.target.files?.[0], false)} />
+      <input ref={galleryRef} type="file" accept="image/*" style={{ display: 'none' }} data-testid="quick-incident-gallery-file" onChange={e => pickPhoto(e.target.files?.[0], true)} />
       {preview && (
         <div style={{ position: 'relative', marginBottom: 10 }}>
           <img src={preview} alt="Attached" data-testid="quick-incident-preview" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 10 }} />
@@ -156,7 +161,10 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
       )}
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" data-testid="quick-incident-photo" className="btn btn-ghost" style={{ minHeight: 44 }} disabled={saving} onClick={() => fileRef.current?.click()}>
-          <Camera size={16} /> {photo ? 'Retake' : 'Photo'}
+          <Camera size={16} /> {photo && !fromGallery ? 'Retake' : 'Photo'}
+        </button>
+        <button type="button" data-testid="quick-incident-gallery" className="btn btn-ghost" style={{ minHeight: 44 }} disabled={saving} onClick={() => galleryRef.current?.click()} aria-label="Pick from gallery">
+          <ImageIcon size={16} /> Gallery
         </button>
         <button data-testid="quick-incident-save" className="btn btn-primary" style={{ flex: 1, minHeight: 44 }} disabled={saving || (!note.trim() && !photo)} onClick={save}>
           <Zap size={16} /> {saving ? 'Saving…' : 'Log Now'}

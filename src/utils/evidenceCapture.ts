@@ -37,7 +37,7 @@ function formatLocation(location: CaptureLocation) {
  * → optional submit_evidence (GPS into evidence_metadata, EVIDENCE_METADATA_SUBMITTED)
  * → verify_evidence_integrity (re-hash of the stored original, logged).
  */
-export async function sealCameraPhoto(file: File, attachLocation: boolean): Promise<SealedCapture> {
+export async function sealCameraPhoto(file: File, attachLocation: boolean, fromGallery = false): Promise<SealedCapture> {
   const caps = await getPlatformCapabilities();
   const capturedAt = new Date();
   // Read the position at capture time, in parallel with reading the bytes. Never prompts here.
@@ -55,17 +55,20 @@ export async function sealCameraPhoto(file: File, attachLocation: boolean): Prom
   });
   const location = await locationPromise;
 
-  const source = `Captured with the device camera in POPS (${caps.platform}). Original preserved unaltered and sealed with SHA-256 at import.`;
+  const source = fromGallery
+    ? `Picked from the device photo library in POPS (${caps.platform}); file last modified ${new Date(file.lastModified || capturedAt.getTime()).toISOString()}. Original preserved unaltered and sealed with SHA-256 at import.`
+    : `Captured with the device camera in POPS (${caps.platform}). Original preserved unaltered and sealed with SHA-256 at import.`;
+  const baseTag = fromGallery ? 'gallery-import' : 'camera-capture';
   const evidence: Evidence = {
     id: evidenceId,
     caseId: 'primary',
     type: 'photo',
-    title: `Camera capture ${capturedAt.toLocaleString()}`,
+    title: `${fromGallery ? 'Gallery photo' : 'Camera capture'} ${capturedAt.toLocaleString()}`,
     description: '',
     date: capturedAt.toISOString().split('T')[0],
     filePath: imported.filePath,
     sha256: imported.sha256,
-    tags: location ? ['camera-capture', 'location-attached'] : ['camera-capture'],
+    tags: location ? [baseTag, 'location-attached'] : [baseTag],
     fileName: imported.fileName,
     fileSize: imported.fileSize,
     fileType: imported.fileType,
