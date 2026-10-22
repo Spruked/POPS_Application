@@ -113,7 +113,8 @@ Case Calendar → **Reminders**. Code: `src-tauri/src/reminders.rs` (engine), `s
 
 ## Older devices
 
-- Minimum: Android 7.0 (API 24) and iOS 15 (Tauri v2 defaults). The CI emulator smoke test now runs on API 24 and API 33 and records the WebView version.
+- Minimum: Android 8.0 (API 26), set by `bundle.android.minSdkVersion` in `src-tauri/tauri.conf.json`, and iOS 15 (Tauri v2 default). Android 7.x (API 24–25) isn't supported: the app crashed at launch there, before POPS code ran, because Tauri's Android plugin layer (Jackson) needs `java.lang.BootstrapMethodError`, which Android 7 lacks. Play won't offer POPS to devices below API 26.
+- CI checks that the built APK declares minSdk 26, and the emulator smoke test runs on API 26 and API 33 and records the WebView version.
 - `index.html` checks for a Chrome 87+ web engine before POPS loads. On an outdated Android System WebView it shows "update Android System WebView" instead of a blank screen.
 
 ## Device Sync (Phase 2: desktop ↔ phone)

@@ -77,6 +77,15 @@ jobs:
       # Installable test build (signed with the Android debug key, bundles the production frontend)
       - name: Build debug APK (installable for device testing)
         run: npx tauri android build --ci --apk --debug --target aarch64 --target x86_64
+      # The minimum supported Android version is 8.0 (API 26), set in tauri.conf.json.
+      # Fail the build if the generated APK declares anything else.
+      - name: Verify APK minimum SDK is 26
+        run: |
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "app-universal-debug.apk" | head -1)
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort | tail -1)
+          SDK=$("$AAPT2" dump badging "$APK" | sed -n "s/^sdkVersion:'\([0-9]*\)'.*/\1/p")
+          echo "APK=$APK minSdk=$SDK"
+          test "$SDK" = "26"
       # Release signing. Repository secrets (Settings -> Secrets and variables -> Actions):
       #   ANDROID_KEY_BASE64   base64 of the upload keystore (.jks)
       #   ANDROID_KEY_ALIAS    key alias inside the keystore
@@ -128,8 +137,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 24 = Android 7.0, the oldest version POPS installs on; 33 = Android 13.
-        api-level: [24, 33]
+        # 26 = Android 8.0, the oldest version POPS installs on; 33 = Android 13.
+        api-level: [26, 33]
     steps:
       - uses: actions/download-artifact@v4
         with: { name: pops-android, path: artifact }

@@ -6,6 +6,9 @@
     "devUrl": "http://localhost:18020"
   },
   "bundle": {
+    "android": {
+      "minSdkVersion": 26
+    },
     "active": true,
     "category": "Productivity",
     "copyright": "",
