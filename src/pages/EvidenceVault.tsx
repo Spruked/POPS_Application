@@ -694,7 +694,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
                       <button className="btn btn-ghost btn-sm" onClick={() => openEvidenceDetail(item)}>
                         <Eye size={14} /> View
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { remove(item.id); show('Evidence removed'); }}>
+                      <button className="btn btn-ghost btn-sm" title="Withdraw evidence" aria-label="Withdraw evidence" onClick={() => { remove(item.id); show('Evidence withdrawn. The original and its custody history are kept.'); }}>
                         <Trash2 size={14} />
                       </button>
                     </td>

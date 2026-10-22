@@ -33,6 +33,15 @@ jobs:
       - run: npm run build
       - run: cargo check --manifest-path src-tauri/Cargo.toml
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Decision D4: no unprotected private-key storage in a release build. The plain-file
+      # development key store must be impossible to compile into one.
+      - name: Release guard - dev key store refused in release builds
+        run: |
+          if cargo check --release --features dev-keystore --manifest-path src-tauri/Cargo.toml > dev-keystore-release.log 2>&1; then
+            echo "dev-keystore compiled into a release build"; exit 1
+          fi
+          grep -q "not allowed in release builds (decision D4)" dev-keystore-release.log
+          echo "release build correctly refuses dev-keystore"
 
   android:
     name: Android APK
