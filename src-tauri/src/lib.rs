@@ -1813,12 +1813,34 @@ fn court_safe_incident_summary(input: &IncidentInput) -> String {
 /// Chain order comes from the hash links, not wall-clock `created_at`, so records moved
 /// between devices with different clocks (Vault Transfer) still append to the true tip.
 ///
-/// Appending requires the hashed entries to form one linear chain: exactly one root
-/// (no predecessor in the ledger) and exactly one tip. A fork (two tips) or a missing
-/// or deleted predecessor (two roots) is refused, so a structurally invalid ledger is
-/// never silently continued. Unhashed rows from before hash-linking existed are not
-/// part of the chain and are ignored here, as before; Verify Ledger still reports them.
+/// Appending requires the hashed entries to form one linear chain: exactly one genesis
+/// (no previous hash), no entry whose previous hash is missing from the ledger, exactly
+/// one tip, and every hashed entry reachable by walking the links from the genesis.
+/// A fork, a deleted entry (including the genesis), or a detached cycle is refused, so
+/// a structurally invalid ledger is never silently continued. Unhashed rows from before
+/// hash-linking existed are not part of the chain and are ignored here, as before;
+/// Verify Ledger still reports them.
 fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
+    let count = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, [], |row| row.get(0)).map_err(|e| e.to_string())
+    };
+    let hashed = count("SELECT COUNT(*) FROM audit_ledger WHERE ledger_entry_hash IS NOT NULL")?;
+    if hashed == 0 {
+        return Ok(None);
+    }
+    let genesis = count(
+        "SELECT COUNT(*) FROM audit_ledger
+         WHERE ledger_entry_hash IS NOT NULL AND previous_ledger_hash IS NULL",
+    )?;
+    let dangling = count(
+        "SELECT COUNT(*) FROM audit_ledger a
+         WHERE a.ledger_entry_hash IS NOT NULL
+           AND a.previous_ledger_hash IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM audit_ledger p
+               WHERE p.ledger_entry_hash = a.previous_ledger_hash
+           )",
+    )?;
     let tips: Vec<String> = conn
         .prepare(
             "SELECT a.ledger_entry_hash
@@ -1832,28 +1854,34 @@ fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String
         )
         .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
         .map_err(|e| e.to_string())?;
-    let roots: i64 = conn
-        .query_row(
-            "SELECT COUNT(*)
-             FROM audit_ledger a
-             WHERE a.ledger_entry_hash IS NOT NULL
-               AND (a.previous_ledger_hash IS NULL
-                    OR NOT EXISTS (
-                        SELECT 1 FROM audit_ledger p
-                        WHERE p.ledger_entry_hash = a.previous_ledger_hash
-                    ))",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|e| e.to_string())?;
+    // Entries reachable from the genesis by following the links. UNION stops on repeats,
+    // so the walk always terminates.
+    let reachable = if genesis == 1 {
+        count(
+            "WITH RECURSIVE chain(id, entry_hash) AS (
+                 SELECT id, ledger_entry_hash FROM audit_ledger
+                 WHERE ledger_entry_hash IS NOT NULL AND previous_ledger_hash IS NULL
+                 UNION
+                 SELECT a.id, a.ledger_entry_hash FROM audit_ledger a
+                 JOIN chain c ON a.previous_ledger_hash = c.entry_hash
+                 WHERE a.ledger_entry_hash IS NOT NULL
+             )
+             SELECT COUNT(*) FROM chain",
+        )?
+    } else {
+        0
+    };
 
-    match (tips.as_slice(), roots) {
-        ([], 0) => Ok(None),
-        ([tip], 1) => Ok(Some(tip.clone())),
+    match tips.as_slice() {
+        [tip] if genesis == 1 && dangling == 0 && reachable == hashed => Ok(Some(tip.clone())),
         _ => Err(format!(
-            "Audit ledger chain is not linear ({} tip(s), {} root(s)). No entry was appended. Run Verify Ledger and resolve the breach before recording more changes.",
+            "Audit ledger chain is not linear ({} tip(s), {} genesis entr{}, {} missing predecessor(s), {} of {} entries reachable from the genesis). No entry was appended. Run Verify Ledger and resolve the breach before recording more changes.",
             tips.len(),
-            roots
+            genesis,
+            if genesis == 1 { "y" } else { "ies" },
+            dangling,
+            reachable,
+            hashed
         )),
     }
 }
@@ -5131,7 +5159,51 @@ mod tests {
         let conn = single_clock_ledger(4);
         conn.execute("DELETE FROM audit_ledger WHERE id = 'row-1'", []).unwrap();
         let err = get_previous_ledger_hash(&conn).unwrap_err();
-        assert!(err.contains("2 root(s)"), "{err}");
+        assert!(err.contains("1 missing predecessor(s)"), "{err}");
+    }
+
+    #[test]
+    fn append_refuses_chain_with_deleted_genesis() {
+        // One tip and one entry without a predecessor in the ledger: counting roots and
+        // tips alone would accept this.
+        let conn = single_clock_ledger(3);
+        conn.execute("DELETE FROM audit_ledger WHERE id = 'row-0'", []).unwrap();
+        let before = ledger_rows(&conn);
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("0 genesis entries") && err.contains("1 missing predecessor(s)"), "{err}");
+        let vault = std::env::temp_dir().join(format!("pops-genesis-{}", uuid::Uuid::new_v4()));
+        assert!(audit_browser_record(&conn, &vault, "report", "r1", "{}", "REPORT_SAVED").is_err());
+        assert_eq!(ledger_rows(&conn), before);
+    }
+
+    #[test]
+    fn append_refuses_detached_cycle() {
+        // A linear chain plus two rows edited to point at each other: still one genesis,
+        // one tip and no missing predecessor, but the cycle is unreachable.
+        let conn = single_clock_ledger(3);
+        for (id, entry, prev) in [("cyc-a", "hash-a", "hash-b"), ("cyc-b", "hash-b", "hash-a")] {
+            conn.execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                 VALUES (?1, ?1, 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?3, ?2)",
+                rusqlite::params![id, entry, prev],
+            )
+            .unwrap();
+        }
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("3 of 5 entries reachable"), "{err}");
+
+        // A ledger that is only a cycle is not treated as empty.
+        let only_cycle = init_db(":memory:");
+        for (id, entry, prev) in [("cyc-a", "hash-a", "hash-b"), ("cyc-b", "hash-b", "hash-a")] {
+            only_cycle
+                .execute(
+                    "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                     VALUES (?1, ?1, 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?3, ?2)",
+                    rusqlite::params![id, entry, prev],
+                )
+                .unwrap();
+        }
+        assert!(get_previous_ledger_hash(&only_cycle).is_err());
     }
 
     #[test]
