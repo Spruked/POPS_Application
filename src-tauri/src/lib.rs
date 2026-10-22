@@ -4,6 +4,7 @@ mod sync;
 mod google_calendar;
 mod vault_transfer;
 mod device_keys;
+mod capture_metadata;
 #[path = "mcp/research_server.rs"]
 mod research_server;
 
@@ -624,6 +625,33 @@ fn migrate_schema(conn: &rusqlite::Connection) {
     reminders::init_reminder_tables(&conn).expect("init reminder tables");
     sync::init_sync_tables(&conn).expect("init sync tables");
     google_calendar::init_gcal_tables(&conn).expect("init google calendar tables");
+    // C1: EXIF facts and acquisition path, separate from Pops!'s own GPS observation
+    // (evidence_metadata) and the import time (evidence.imported_at). One row per evidence
+    // original, recorded once.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS evidence_capture_metadata (
+            evidence_id TEXT PRIMARY KEY,
+            file_sha256 TEXT NOT NULL,
+            requested_source TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            acquisition_path TEXT NOT NULL,
+            original_camera_bytes TEXT NOT NULL,
+            acquisition_basis TEXT NOT NULL,
+            location_may_be_redacted INTEGER NOT NULL,
+            exif_status TEXT NOT NULL,
+            exif_capture_time_raw TEXT,
+            exif_capture_time_offset_raw TEXT,
+            exif_capture_time TEXT,
+            exif_capture_time_status TEXT NOT NULL,
+            exif_gps_status TEXT NOT NULL,
+            exif_gps_latitude REAL,
+            exif_gps_longitude REAL,
+            extractor TEXT NOT NULL,
+            extracted_at TEXT NOT NULL,
+            record_json TEXT NOT NULL
+        );",
+    )
+    .expect("init capture metadata table");
 }
 
 // ─── Data Structures ─────────────────────────────────────────────
@@ -2206,6 +2234,140 @@ fn list_live_evidence(conn: &rusqlite::Connection) -> Result<Vec<EvidenceItem>, 
     let rows = stmt.query_map([], evidence_row).map_err(|e| e.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())
+}
+
+/// C1: records EXIF facts and the acquisition path for one evidence original. Reads the
+/// stored original (never a caller-supplied path or hash), refuses if its bytes no longer
+/// match the recorded SHA-256, parses read-only, and commits the record with its custody
+/// row and audit entry in one transaction. Recorded once per evidence record.
+#[tauri::command]
+fn record_capture_metadata(db: State<DbConn>, evidence_id: String, requested_source: String) -> Result<serde_json::Value, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    record_capture_metadata_on(&conn, &evidence_id, &requested_source, std::env::consts::OS, chrono::Local::now().naive_local())
+}
+
+fn record_capture_metadata_on(
+    conn: &rusqlite::Connection,
+    evidence_id: &str,
+    requested_source: &str,
+    platform: &str,
+    recorded_at_local: chrono::NaiveDateTime,
+) -> Result<serde_json::Value, String> {
+    use rusqlite::OptionalExtension;
+    let found: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT file_path, sha256, file_name, withdrawn_at FROM evidence WHERE id = ?1",
+            [evidence_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((file_path, recorded_sha, file_name, withdrawn_at)) = found else {
+        return Err("Evidence record not found. Nothing was recorded.".into());
+    };
+    if withdrawn_at.is_some() {
+        return Err("This evidence record has been withdrawn. Nothing was recorded.".into());
+    }
+    let Some(file_path) = file_path else {
+        return Err("This evidence record has no original file. Nothing was recorded.".into());
+    };
+    let bytes = fs::read(&file_path).map_err(|e| format!("Could not read the stored original: {e}. Nothing was recorded."))?;
+    let actual_sha = sha256_hex(&bytes);
+    if actual_sha != recorded_sha {
+        record_evidence_action(
+            conn,
+            evidence_id,
+            "HASH_MISMATCH",
+            &actual_sha,
+            serde_json::json!({
+                "evidence_id": evidence_id,
+                "action": "HASH_MISMATCH",
+                "context": "capture metadata extraction",
+                "expected_hash": recorded_sha,
+                "actual_hash": actual_sha,
+            })
+            .to_string(),
+        )?;
+        return Err("The stored original no longer matches its recorded SHA-256. Capture metadata was not recorded; the mismatch was logged.".into());
+    }
+
+    let facts = capture_metadata::extract(&bytes);
+    let acquisition = capture_metadata::classify(requested_source, platform, file_name.as_deref(), recorded_at_local)?;
+    let record = serde_json::json!({
+        "evidenceId": evidence_id,
+        "fileSha256": actual_sha,
+        "acquisition": acquisition,
+        "exif": facts,
+        "extractor": capture_metadata::EXTRACTOR,
+    });
+
+    let existing: Option<String> = conn
+        .query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [evidence_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(existing) = existing {
+        let existing: serde_json::Value = serde_json::from_str(&existing).map_err(|e| e.to_string())?;
+        if existing == record {
+            return Ok(serde_json::json!({ "alreadyRecorded": true, "record": existing }));
+        }
+        return Err("Capture metadata for this evidence is already recorded and can't be replaced. Nothing was saved.".into());
+    }
+
+    let extracted_at = chrono::Utc::now().to_rfc3339();
+    let record_json = record.to_string();
+    commit_mutation(conn, |tx| {
+        tx.execute(
+            "INSERT INTO evidence_capture_metadata (
+                evidence_id, file_sha256, requested_source, platform, acquisition_path,
+                original_camera_bytes, acquisition_basis, location_may_be_redacted,
+                exif_status, exif_capture_time_raw, exif_capture_time_offset_raw, exif_capture_time,
+                exif_capture_time_status, exif_gps_status, exif_gps_latitude, exif_gps_longitude,
+                extractor, extracted_at, record_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            rusqlite::params![
+                evidence_id,
+                &actual_sha,
+                &acquisition.requested_source,
+                &acquisition.platform,
+                &acquisition.acquisition_path,
+                &acquisition.original_camera_bytes,
+                &acquisition.basis,
+                acquisition.location_may_be_redacted as i64,
+                &facts.status,
+                &facts.capture_time_raw,
+                &facts.capture_time_offset_raw,
+                &facts.capture_time,
+                &facts.capture_time_status,
+                &facts.gps_status,
+                &facts.gps_latitude,
+                &facts.gps_longitude,
+                capture_metadata::EXTRACTOR,
+                &extracted_at,
+                &record_json,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        write_evidence_action(
+            tx,
+            evidence_id,
+            "CAPTURE_METADATA_RECORDED",
+            &actual_sha,
+            serde_json::json!({ "evidence_id": evidence_id, "action": "CAPTURE_METADATA_RECORDED", "record": record }).to_string(),
+        )
+    })?;
+    Ok(serde_json::json!({ "alreadyRecorded": false, "record": record }))
+}
+
+/// C1: the recorded capture metadata for one evidence record, if any.
+#[tauri::command]
+fn get_capture_metadata(db: State<DbConn>, evidence_id: String) -> Result<Option<serde_json::Value>, String> {
+    use rusqlite::OptionalExtension;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let raw: Option<String> = conn
+        .query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [&evidence_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    raw.map(|r| serde_json::from_str(&r).map_err(|e| e.to_string())).transpose()
 }
 
 /// This installation's signing identity (S0). Release builds report that no OS-backed
@@ -5292,6 +5454,173 @@ async fn local_agent_chat(
 mod tests {
     use super::*;
 
+    // ─── C1 capture metadata ───────────────────────────────────────────
+
+    /// Stores `bytes` as an original on disk and seals an evidence record for it.
+    fn c1_evidence(conn: &rusqlite::Connection, id: &str, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pops-c1-{}", uuid::Uuid::new_v4())).join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let mut item = s0_item(id, &sha256_hex(bytes));
+        item.file_path = Some(path.to_string_lossy().to_string());
+        item.file_name = Some(name.into());
+        item.file_size = Some(bytes.len() as i64);
+        save_evidence_on(conn, item).unwrap();
+        path
+    }
+
+    fn c1_record(conn: &rusqlite::Connection, id: &str) -> serde_json::Value {
+        let raw: String = conn.query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [id], |r| r.get(0)).unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    /// The device clock at recording time in C1 tests: three minutes after the
+    /// camera-intent file names used below.
+    fn c1_now() -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str("2026-10-21 16:35:00", "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    fn c1_photo(with_gps: bool, capture_time: &str) -> Vec<u8> {
+        use crate::capture_metadata::test_images::*;
+        use exif::Tag;
+        let mut fields = vec![
+            exif_ascii(Tag::Model, "Pixel 7"),
+            exif_ascii(Tag::DateTimeOriginal, capture_time),
+            exif_ascii(Tag::OffsetTimeOriginal, "-05:00"),
+        ];
+        if with_gps {
+            fields.push(exif_dms(Tag::GPSLatitude, 37, 5, 1512));
+            fields.push(exif_ascii(Tag::GPSLatitudeRef, "N"));
+            fields.push(exif_dms(Tag::GPSLongitude, 94, 30, 4788));
+            fields.push(exif_ascii(Tag::GPSLongitudeRef, "W"));
+        }
+        jpeg_with(&fields)
+    }
+
+    #[test]
+    fn c1_camera_capture_records_exif_and_indicated_original_without_touching_bytes() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(true, "2026:10:21 16:32:00");
+        let path = c1_evidence(&conn, "cam1", "JPEG_20261021_163200_8421390.jpg", &bytes);
+        record_capture_metadata_on(&conn, "cam1", "camera", "android", c1_now()).unwrap();
+
+        let rec = c1_record(&conn, "cam1");
+        assert_eq!(rec["acquisition"]["acquisitionPath"], "android_camera_capture_intent");
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "indicated");
+        assert_eq!(rec["exif"]["captureTime"], "2026-10-21T16:32:00-05:00");
+        assert_eq!(rec["exif"]["gpsStatus"], "present");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "received bytes must never be modified");
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 1);
+        assert_eq!(verify_audit_ledger_conn(&conn).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn c1_missing_exif_is_recorded_as_missing() {
+        let conn = init_db(":memory:");
+        let bytes = crate::capture_metadata::test_images::jpeg_without_exif();
+        let path = c1_evidence(&conn, "noexif", "screenshot.jpg", &bytes);
+        record_capture_metadata_on(&conn, "noexif", "file", "windows", c1_now()).unwrap();
+        let rec = c1_record(&conn, "noexif");
+        assert_eq!(rec["exif"]["status"], "absent");
+        assert_eq!(rec["exif"]["captureTime"], serde_json::Value::Null);
+        assert_eq!(rec["exif"]["gpsLatitude"], serde_json::Value::Null);
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "not_established");
+        let (time, lat): (Option<String>, Option<f64>) = conn
+            .query_row("SELECT exif_capture_time, exif_gps_latitude FROM evidence_capture_metadata WHERE evidence_id = 'noexif'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((time, lat), (None, None));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn c1_stripped_gps_stays_missing_even_when_pops_has_its_own_gps() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(false, "2026:10:21 16:32:00");
+        let path = c1_evidence(&conn, "picked", "PXL_20261021_163200.jpg", &bytes);
+        // Pops!'s own observation, recorded separately at import.
+        submit_evidence_on(&conn, EvidencePayload {
+            evidence_id: "picked".into(),
+            document_id: "picked".into(),
+            file_path: path.to_string_lossy().to_string(),
+            file_hash: sha256_hex(&bytes),
+            exif_json: "{\"source\":\"device_location_at_capture\"}".into(),
+            gps_lat: Some(37.08),
+            gps_lon: Some(-94.51),
+            device_identity: "POPS android".into(),
+        })
+        .unwrap();
+        record_capture_metadata_on(&conn, "picked", "photo_library", "android", c1_now()).unwrap();
+
+        let rec = c1_record(&conn, "picked");
+        assert_eq!(rec["exif"]["gpsStatus"], "absent");
+        assert_eq!(rec["exif"]["gpsLatitude"], serde_json::Value::Null);
+        assert_eq!(rec["acquisition"]["acquisitionPath"], "android_content_picker");
+        assert_eq!(rec["acquisition"]["locationMayBeRedacted"], true);
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "not_established");
+        // The two sources stay separate: Pops!'s GPS is unchanged and not copied into EXIF facts.
+        let pops_lat: f64 = conn.query_row("SELECT gps_lat FROM evidence_metadata WHERE evidence_id = 'picked'", [], |r| r.get(0)).unwrap();
+        assert_eq!(pops_lat, 37.08);
+        let exif_lat: Option<f64> = conn.query_row("SELECT exif_gps_latitude FROM evidence_capture_metadata WHERE evidence_id = 'picked'", [], |r| r.get(0)).unwrap();
+        assert_eq!(exif_lat, None);
+    }
+
+    #[test]
+    fn c1_altered_exif_is_its_own_record_and_a_changed_original_is_refused() {
+        let conn = init_db(":memory:");
+        let original = c1_photo(true, "2026:10:21 16:32:00");
+        let altered = c1_photo(true, "2026:10:19 09:00:00"); // capture time edited before import
+        c1_evidence(&conn, "orig", "a.jpg", &original);
+        c1_evidence(&conn, "edit", "b.jpg", &altered);
+        record_capture_metadata_on(&conn, "orig", "file", "windows", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "edit", "file", "windows", c1_now()).unwrap();
+        let (a, b) = (c1_record(&conn, "orig"), c1_record(&conn, "edit"));
+        assert_ne!(a["fileSha256"], b["fileSha256"]);
+        assert_eq!(a["exif"]["captureTimeRaw"], "2026:10:21 16:32:00");
+        assert_eq!(b["exif"]["captureTimeRaw"], "2026:10:19 09:00:00");
+
+        // An original changed on disk after import is refused, logged, and nothing is recorded.
+        let path = c1_evidence(&conn, "tamper", "c.jpg", &original);
+        std::fs::write(&path, &altered).unwrap();
+        let err = record_capture_metadata_on(&conn, "tamper", "file", "windows", c1_now()).unwrap_err();
+        assert!(err.contains("no longer matches"), "{err}");
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_capture_metadata WHERE evidence_id = 'tamper'"), 0);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain WHERE evidence_id = 'tamper' AND action = 'HASH_MISMATCH'"), 1);
+    }
+
+    #[test]
+    fn c1_repeated_imports_record_separately_and_each_record_is_written_once() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(true, "2026:10:21 16:32:00");
+        c1_evidence(&conn, "first", "JPEG_20261021_163200_1.jpg", &bytes);
+        c1_evidence(&conn, "second", "JPEG_20261021_163200_1.jpg", &bytes);
+        record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "second", "camera", "android", c1_now()).unwrap();
+        let (a, b) = (c1_record(&conn, "first"), c1_record(&conn, "second"));
+        assert_eq!(a["fileSha256"], b["fileSha256"]);
+        assert_eq!(a["exif"], b["exif"]);
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
+
+        let again = record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
+        assert_eq!(again["alreadyRecorded"], true);
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
+        let err = record_capture_metadata_on(&conn, "first", "photo_library", "android", c1_now()).unwrap_err();
+        assert!(err.contains("can't be replaced"), "{err}");
+        assert_eq!(c1_record(&conn, "first"), a);
+    }
+
+    #[test]
+    fn c1_withdrawn_or_fileless_evidence_is_refused() {
+        let conn = init_db(":memory:");
+        c1_evidence(&conn, "w1", "a.jpg", &c1_photo(false, "2026:10:21 16:32:00"));
+        withdraw_evidence_on(&conn, "w1".into()).unwrap();
+        assert!(record_capture_metadata_on(&conn, "w1", "file", "windows", c1_now()).unwrap_err().contains("withdrawn"));
+        let mut note = s0_item("note1", "ee55");
+        note.file_path = None;
+        save_evidence_on(&conn, note).unwrap();
+        assert!(record_capture_metadata_on(&conn, "note1", "file", "windows", c1_now()).unwrap_err().contains("no original file"));
+    }
+
     // ─── Sync Engine S0 ────────────────────────────────────────────────
 
     fn s0_item(id: &str, sha: &str) -> EvidenceItem {
@@ -5848,6 +6177,8 @@ pub fn run() {
             get_evidence_locations,
             get_withdrawn_evidence,
             get_device_identity,
+            record_capture_metadata,
+            get_capture_metadata,
             vault_transfer::export_vault_transfer,
             vault_transfer::inspect_vault_transfer,
             vault_transfer::restore_vault_transfer,
