@@ -33,6 +33,15 @@ jobs:
       - run: npm run build
       - run: cargo check --manifest-path src-tauri/Cargo.toml
       - run: cargo test --manifest-path src-tauri/Cargo.toml
+      # Decision D4: no unprotected private-key storage in a release build. The plain-file
+      # development key store must be impossible to compile into one.
+      - name: Release guard - dev key store refused in release builds
+        run: |
+          if cargo check --release --features dev-keystore --manifest-path src-tauri/Cargo.toml > dev-keystore-release.log 2>&1; then
+            echo "dev-keystore compiled into a release build"; exit 1
+          fi
+          grep -q "not allowed in release builds (decision D4)" dev-keystore-release.log
+          echo "release build correctly refuses dev-keystore"
 
   android:
     name: Android APK
@@ -77,6 +86,20 @@ jobs:
       # Installable test build (signed with the Android debug key, bundles the production frontend)
       - name: Build debug APK (installable for device testing)
         run: npx tauri android build --ci --apk --debug --target aarch64 --target x86_64
+      # The minimum supported Android version is 8.0 (API 26), set in tauri.conf.json.
+      # Fail the build if the generated APK declares anything else.
+      - name: Verify APK minimum SDK is 26
+        run: |
+          set -o pipefail
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "app-universal-debug.apk" | head -1)
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)
+          test -x "$AAPT2" || { echo "aapt2 not found under $ANDROID_HOME/build-tools"; exit 1; }
+          BADGING=$("$AAPT2" dump badging "$APK")
+          echo "$BADGING" | grep -E "^(package|sdkVersion|minSdkVersion|targetSdkVersion):" || true
+          # aapt2 prints minSdkVersion:'N' (older aapt printed sdkVersion:'N').
+          SDK=$(echo "$BADGING" | sed -nE "s/^(min)?[sS]dkVersion:'([0-9]+)'.*/\2/p" | head -1)
+          echo "APK=$APK minSdk=$SDK"
+          test "$SDK" = "26" || { echo "Expected minSdk 26, got '$SDK'"; exit 1; }
       # Release signing. Repository secrets (Settings -> Secrets and variables -> Actions):
       #   ANDROID_KEY_BASE64   base64 of the upload keystore (.jks)
       #   ANDROID_KEY_ALIAS    key alias inside the keystore
@@ -128,8 +151,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 24 = Android 7.0, the oldest version POPS installs on; 33 = Android 13.
-        api-level: [24, 33]
+        # 26 = Android 8.0, the oldest version POPS installs on; 33 = Android 13.
+        api-level: [26, 33]
     steps:
       - uses: actions/download-artifact@v4
         with: { name: pops-android, path: artifact }
@@ -146,7 +169,7 @@ jobs:
           disable-animations: true
           script: |
             APK=$(find artifact -name "app-universal-debug.apk" | head -1); echo "APK=$APK"; adb install -r -g "$APK"
-            adb logcat -c
+            adb logcat -c || echo "logcat clear not supported on this image (fresh emulator); continuing"
             adb emu geo fix -104.990251 39.7392358
             adb shell monkey -p com.proofofpresence.app -c android.intent.category.LAUNCHER 1
             sleep 45
@@ -169,6 +192,44 @@ jobs:
             pops-launch.png
             logcat.txt
             permissions.txt
+
+  # Android 8 (API 26) ships WebView 69; POPS requires Chrome 87+, so the smoke test
+  # above only proves the app starts. This job verifies the real interface on API 26
+  # with a pinned AOSP WebView 109 (same version as the API 33 image), installed into
+  # an AOSP emulator image. CI only: the app and its WebView requirement are unchanged.
+  android-ui-api26:
+    name: Android 8 (API 26) interface test
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: pops-android, path: artifact }
+      - name: Fetch and verify pinned AOSP WebView 109.0.5414.123
+        run: bash scripts/ci/fetch_aosp_webview.sh webview
+      - name: Build WebView provider-list overlay for the emulator image
+        run: bash scripts/ci/build_webview_provider_overlay.sh webview
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Install WebView, launch POPS, verify Case Overview and navigation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -writable-system -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: bash scripts/ci/android_ui_api26.sh "$(find artifact -name app-universal-debug.apk | head -1)" webview/webview.apk ui-api26 webview/webview-provider-overlay.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pops-android-ui-api26
+          path: |
+            webview/webview-provenance.txt
+            webview/webview-provider-overlay.xml
+            ui-api26/
 
   ios:
     name: iOS

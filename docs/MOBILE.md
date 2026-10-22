@@ -83,11 +83,14 @@ Restore order:
 3. Run SQLite `integrity_check`.
 4. Re-hash each evidence original against its recorded sha256. Mismatches are flagged, not hidden.
 5. Rewrite the Windows/macOS/Linux vault paths for this device.
-6. Save a `pre-restore-<time>.db` snapshot.
-7. Copy the files and swap in the database with the SQLite backup API.
-8. Add one `VAULT_TRANSFER_RESTORED` chain-of-custody row per evidence item, plus one hash-linked audit-ledger entry.
+6. **Non-destructive check.** Refuse the restore, with nothing changed, if this device holds any user record the package doesn't contain identically, or if the package would overwrite an existing original with different bytes. Every table counts as user records except device bookkeeping (`audit_ledger`, `reminder_settings`, `sync_peers`, `sync_state`, `gcal_links`). The untouched default case that every install seeds is ignored. A freshly installed device always passes.
+7. Save a `pre-restore-<time>.db` snapshot.
+8. Copy the files and swap in the database with the SQLite backup API.
+9. Add one `VAULT_TRANSFER_RESTORED` chain-of-custody row per evidence item, plus one hash-linked audit-ledger entry that records the pre-restore snapshot's SHA-256, so the replaced device bookkeeping stays verifiably preserved.
 
-Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cover the round trip, a tampered entry, an altered manifest, path traversal, and cross-OS path remapping.
+Vault Transfer is for backup and new-device setup. Combining two vaults that both hold records is the job of the Sync Engine, not restore.
+
+Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cover the round trip, a tampered entry, an altered manifest, path traversal, cross-OS path remapping, restore into a freshly launched device, and every non-destructive refusal (device-only evidence, edited shared records, an edited default case, an original that would be overwritten, and records an older package cannot represent).
 
 ## iOS signing (CI)
 
@@ -113,8 +116,29 @@ Case Calendar → **Reminders**. Code: `src-tauri/src/reminders.rs` (engine), `s
 
 ## Older devices
 
-- Minimum: Android 7.0 (API 24) and iOS 15 (Tauri v2 defaults). The CI emulator smoke test now runs on API 24 and API 33 and records the WebView version.
+- Minimum: Android 8.0 (API 26), set by `bundle.android.minSdkVersion` in `src-tauri/tauri.conf.json`, and iOS 15 (Tauri v2 default). Android 7.x (API 24–25) isn't supported: the app crashed at launch there, before POPS code ran, because Tauri's Android plugin layer (Jackson) needs `java.lang.BootstrapMethodError`, which Android 7 lacks. Play won't offer POPS to devices below API 26.
+- CI checks that the built APK declares minSdk 26, and the emulator smoke test runs on API 26 and API 33 and records the WebView version.
+- The API 26 emulator ships WebView 69, which is below POPS's Chrome 87 requirement, so the smoke test there only proves the app starts. A separate CI job, **Android 8 (API 26) interface test**, installs a pinned AOSP WebView (109.0.5414.123, `external/chromium-webview` at commit `259ec8d2`, verified by git blob id) on an AOSP API 26 image. That image accepts only `com.google.android.webview` as a provider and boots with no usable WebView, so CI adds a small static overlay that puts `com.android.webview` on its provider list. The overlay is built in `scripts/ci/build_webview_provider_overlay.sh` and changes nothing else. It then checks that Case Overview renders and that Evidence → Calendar → Dashboard navigation works. The app and its WebView requirement are unchanged.
 - `index.html` checks for a Chrome 87+ web engine before POPS loads. On an outdated Android System WebView it shows "update Android System WebView" instead of a blank screen.
+
+## Capture metadata (C1)
+
+After a photo or file is sealed, `record_capture_metadata` (`src-tauri/src/capture_metadata.rs`) reads the **stored** original. It refuses if the bytes no longer match the recorded SHA-256, then records two things in `evidence_capture_metadata`. The original bytes are never modified.
+
+- **EXIF facts as found:** `DateTimeOriginal`, `OffsetTimeOriginal` and GPS, plus camera make/model, software and the EXIF modify time. Each fact has a status. Absent, blank, incomplete (for example, a missing hemisphere) or invalid values are recorded as such, with their raw form, and are never reconstructed. A tag stored with a non-standard type is recorded as invalid, with its value as found, never as missing. A capture time without a recorded offset stays local time, with no zone assumed.
+- **Acquisition path,** decided in Rust from the platform, the requested source and the stored file name:
+
+| Path | When | Original camera bytes |
+|---|---|---|
+| `android_camera_capture_intent` | Camera button, and the file has the name (`JPEG_yyyyMMdd_HHmmss_<digits>.jpg`) and a creation time (at most 15 minutes before recording) of the file Pops! asks the camera app to write | indicated: the WebView doesn't report which app delivered the file, and other camera apps use the same naming, so this is not proof |
+| `android_camera_requested_picker_fallback` | Camera button, but `wry` fell back to the file picker, or the file is named like a capture file but its time doesn't match this capture | not established |
+| `android_content_picker` | Gallery/file button (`ACTION_GET_CONTENT`); location may have been removed by Android | not established |
+| `desktop_file_selection` | Desktop file import | not established (file as read from disk) |
+| `ios_file_chooser` | iOS (not yet characterized) | unknown |
+
+`established` is reserved for a path where the platform itself reports which component delivered the file. No current path does.
+
+These facts are kept apart from Pops!'s own GPS reading (`evidence_metadata`) and the import time (`evidence.imported_at`). Each evidence record's capture metadata is written once, atomically with a custody row and a hash-linked audit entry. The camera rules describe `wry` 0.57.0's Android file chooser, and a test fails if `wry` changes so they get re-verified. EXIF values can be edited before import; they are supporting context, not proof of presence.
 
 ## Device Sync (Phase 2: desktop ↔ phone)
 
