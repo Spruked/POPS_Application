@@ -2243,7 +2243,7 @@ fn list_live_evidence(conn: &rusqlite::Connection) -> Result<Vec<EvidenceItem>, 
 #[tauri::command]
 fn record_capture_metadata(db: State<DbConn>, evidence_id: String, requested_source: String) -> Result<serde_json::Value, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    record_capture_metadata_on(&conn, &evidence_id, &requested_source, std::env::consts::OS)
+    record_capture_metadata_on(&conn, &evidence_id, &requested_source, std::env::consts::OS, chrono::Local::now().naive_local())
 }
 
 fn record_capture_metadata_on(
@@ -2251,6 +2251,7 @@ fn record_capture_metadata_on(
     evidence_id: &str,
     requested_source: &str,
     platform: &str,
+    recorded_at_local: chrono::NaiveDateTime,
 ) -> Result<serde_json::Value, String> {
     use rusqlite::OptionalExtension;
     let found: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
@@ -2291,7 +2292,7 @@ fn record_capture_metadata_on(
     }
 
     let facts = capture_metadata::extract(&bytes);
-    let acquisition = capture_metadata::classify(requested_source, platform, file_name.as_deref())?;
+    let acquisition = capture_metadata::classify(requested_source, platform, file_name.as_deref(), recorded_at_local)?;
     let record = serde_json::json!({
         "evidenceId": evidence_id,
         "fileSha256": actual_sha,
@@ -5474,6 +5475,12 @@ mod tests {
         serde_json::from_str(&raw).unwrap()
     }
 
+    /// The device clock at recording time in C1 tests: three minutes after the
+    /// camera-intent file names used below.
+    fn c1_now() -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str("2026-10-21 16:35:00", "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
     fn c1_photo(with_gps: bool, capture_time: &str) -> Vec<u8> {
         use crate::capture_metadata::test_images::*;
         use exif::Tag;
@@ -5492,15 +5499,15 @@ mod tests {
     }
 
     #[test]
-    fn c1_camera_capture_records_exif_and_established_original_without_touching_bytes() {
+    fn c1_camera_capture_records_exif_and_indicated_original_without_touching_bytes() {
         let conn = init_db(":memory:");
         let bytes = c1_photo(true, "2026:10:21 16:32:00");
         let path = c1_evidence(&conn, "cam1", "JPEG_20261021_163200_8421390.jpg", &bytes);
-        record_capture_metadata_on(&conn, "cam1", "camera", "android").unwrap();
+        record_capture_metadata_on(&conn, "cam1", "camera", "android", c1_now()).unwrap();
 
         let rec = c1_record(&conn, "cam1");
         assert_eq!(rec["acquisition"]["acquisitionPath"], "android_camera_capture_intent");
-        assert_eq!(rec["acquisition"]["originalCameraBytes"], "established");
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "indicated");
         assert_eq!(rec["exif"]["captureTime"], "2026-10-21T16:32:00-05:00");
         assert_eq!(rec["exif"]["gpsStatus"], "present");
         assert_eq!(std::fs::read(&path).unwrap(), bytes, "received bytes must never be modified");
@@ -5513,7 +5520,7 @@ mod tests {
         let conn = init_db(":memory:");
         let bytes = crate::capture_metadata::test_images::jpeg_without_exif();
         let path = c1_evidence(&conn, "noexif", "screenshot.jpg", &bytes);
-        record_capture_metadata_on(&conn, "noexif", "file", "windows").unwrap();
+        record_capture_metadata_on(&conn, "noexif", "file", "windows", c1_now()).unwrap();
         let rec = c1_record(&conn, "noexif");
         assert_eq!(rec["exif"]["status"], "absent");
         assert_eq!(rec["exif"]["captureTime"], serde_json::Value::Null);
@@ -5543,7 +5550,7 @@ mod tests {
             device_identity: "POPS android".into(),
         })
         .unwrap();
-        record_capture_metadata_on(&conn, "picked", "photo_library", "android").unwrap();
+        record_capture_metadata_on(&conn, "picked", "photo_library", "android", c1_now()).unwrap();
 
         let rec = c1_record(&conn, "picked");
         assert_eq!(rec["exif"]["gpsStatus"], "absent");
@@ -5565,8 +5572,8 @@ mod tests {
         let altered = c1_photo(true, "2026:10:19 09:00:00"); // capture time edited before import
         c1_evidence(&conn, "orig", "a.jpg", &original);
         c1_evidence(&conn, "edit", "b.jpg", &altered);
-        record_capture_metadata_on(&conn, "orig", "file", "windows").unwrap();
-        record_capture_metadata_on(&conn, "edit", "file", "windows").unwrap();
+        record_capture_metadata_on(&conn, "orig", "file", "windows", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "edit", "file", "windows", c1_now()).unwrap();
         let (a, b) = (c1_record(&conn, "orig"), c1_record(&conn, "edit"));
         assert_ne!(a["fileSha256"], b["fileSha256"]);
         assert_eq!(a["exif"]["captureTimeRaw"], "2026:10:21 16:32:00");
@@ -5575,7 +5582,7 @@ mod tests {
         // An original changed on disk after import is refused, logged, and nothing is recorded.
         let path = c1_evidence(&conn, "tamper", "c.jpg", &original);
         std::fs::write(&path, &altered).unwrap();
-        let err = record_capture_metadata_on(&conn, "tamper", "file", "windows").unwrap_err();
+        let err = record_capture_metadata_on(&conn, "tamper", "file", "windows", c1_now()).unwrap_err();
         assert!(err.contains("no longer matches"), "{err}");
         assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_capture_metadata WHERE evidence_id = 'tamper'"), 0);
         assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain WHERE evidence_id = 'tamper' AND action = 'HASH_MISMATCH'"), 1);
@@ -5587,17 +5594,17 @@ mod tests {
         let bytes = c1_photo(true, "2026:10:21 16:32:00");
         c1_evidence(&conn, "first", "JPEG_20261021_163200_1.jpg", &bytes);
         c1_evidence(&conn, "second", "JPEG_20261021_163200_1.jpg", &bytes);
-        record_capture_metadata_on(&conn, "first", "camera", "android").unwrap();
-        record_capture_metadata_on(&conn, "second", "camera", "android").unwrap();
+        record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "second", "camera", "android", c1_now()).unwrap();
         let (a, b) = (c1_record(&conn, "first"), c1_record(&conn, "second"));
         assert_eq!(a["fileSha256"], b["fileSha256"]);
         assert_eq!(a["exif"], b["exif"]);
         assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
 
-        let again = record_capture_metadata_on(&conn, "first", "camera", "android").unwrap();
+        let again = record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
         assert_eq!(again["alreadyRecorded"], true);
         assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
-        let err = record_capture_metadata_on(&conn, "first", "photo_library", "android").unwrap_err();
+        let err = record_capture_metadata_on(&conn, "first", "photo_library", "android", c1_now()).unwrap_err();
         assert!(err.contains("can't be replaced"), "{err}");
         assert_eq!(c1_record(&conn, "first"), a);
     }
@@ -5607,11 +5614,11 @@ mod tests {
         let conn = init_db(":memory:");
         c1_evidence(&conn, "w1", "a.jpg", &c1_photo(false, "2026:10:21 16:32:00"));
         withdraw_evidence_on(&conn, "w1".into()).unwrap();
-        assert!(record_capture_metadata_on(&conn, "w1", "file", "windows").unwrap_err().contains("withdrawn"));
+        assert!(record_capture_metadata_on(&conn, "w1", "file", "windows", c1_now()).unwrap_err().contains("withdrawn"));
         let mut note = s0_item("note1", "ee55");
         note.file_path = None;
         save_evidence_on(&conn, note).unwrap();
-        assert!(record_capture_metadata_on(&conn, "note1", "file", "windows").unwrap_err().contains("no original file"));
+        assert!(record_capture_metadata_on(&conn, "note1", "file", "windows", c1_now()).unwrap_err().contains("no original file"));
     }
 
     // ─── Sync Engine S0 ────────────────────────────────────────────────

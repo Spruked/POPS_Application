@@ -627,10 +627,10 @@ mod tests {
     }
 
     #[test]
-    fn restoring_a_pre_s0_vault_brings_it_to_the_current_schema() {
+    fn restoring_a_pre_s0_or_pre_c1_vault_brings_it_to_the_current_schema() {
         let (root, conn) = desktop_vault();
         // Make the source look like a vault from before S0: no withdrawal columns.
-        conn.execute_batch("ALTER TABLE evidence DROP COLUMN withdrawn_at; ALTER TABLE evidence DROP COLUMN withdrawn_reason;").unwrap();
+        conn.execute_batch("ALTER TABLE evidence DROP COLUMN withdrawn_at; ALTER TABLE evidence DROP COLUMN withdrawn_reason; DROP TABLE evidence_capture_metadata;").unwrap();
         let (_, bytes) = package(&conn, &root);
         let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
         let read = read_manifest(&mut archive).unwrap();
@@ -643,6 +643,9 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM evidence WHERE withdrawn_at IS NULL", [], |r| r.get(0))
             .unwrap();
         assert_eq!(live, 2);
+        // And from before C1: the capture-metadata table exists again.
+        let c1: i64 = staged.query_row("SELECT COUNT(*) FROM evidence_capture_metadata", [], |r| r.get(0)).unwrap();
+        assert_eq!(c1, 0);
     }
 
     #[test]

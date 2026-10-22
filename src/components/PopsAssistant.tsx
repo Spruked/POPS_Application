@@ -177,8 +177,15 @@ export default function PopsAssistant({ activePage, onNavigate }: PopsAssistantP
         : result.locationMissing
           ? " Location could not be read, so it was sealed without it."
           : "";
-      addAssistantMessage(`Photo sealed in your Evidence Vault. SHA-256 ${result.evidence.sha256.slice(0, 16)}…, integrity ${result.integrity}.${where} Add a title and description when you're ready.`);
-      (window as any).__showToast?.(`Photo sealed in vault (${result.integrity})`);
+      const metadataNote = result.captureMetadataError
+        ? ` Capture metadata (EXIF and how the photo arrived) was not recorded: ${result.captureMetadataError}. The sealed original is unaffected.`
+        : "";
+      addAssistantMessage(`Photo sealed in your Evidence Vault. SHA-256 ${result.evidence.sha256.slice(0, 16)}…, integrity ${result.integrity}.${where}${metadataNote} Add a title and description when you're ready.`);
+      (window as any).__showToast?.(
+        result.captureMetadataError
+          ? `Photo sealed in vault (${result.integrity}). Capture metadata was not recorded.`
+          : `Photo sealed in vault (${result.integrity})`,
+      );
       onNavigate("evidence");
       if (window.matchMedia(COMPACT_QUERY).matches) setDockState("closed");
     } catch (error) {

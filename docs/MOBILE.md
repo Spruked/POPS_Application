@@ -120,16 +120,18 @@ Case Calendar → **Reminders**. Code: `src-tauri/src/reminders.rs` (engine), `s
 
 After a photo or file is sealed, `record_capture_metadata` (`src-tauri/src/capture_metadata.rs`) reads the **stored** original. It refuses if the bytes no longer match the recorded SHA-256, then records two things in `evidence_capture_metadata`. The original bytes are never modified.
 
-- **EXIF facts as found:** `DateTimeOriginal`, `OffsetTimeOriginal` and GPS, plus camera make/model, software and the EXIF modify time. Each fact has a status. Absent, blank, incomplete (for example, a missing hemisphere) or invalid values are recorded as such, with their raw form, and are never reconstructed. A capture time without a recorded offset stays local time, with no zone assumed.
+- **EXIF facts as found:** `DateTimeOriginal`, `OffsetTimeOriginal` and GPS, plus camera make/model, software and the EXIF modify time. Each fact has a status. Absent, blank, incomplete (for example, a missing hemisphere) or invalid values are recorded as such, with their raw form, and are never reconstructed. A tag stored with a non-standard type is recorded as invalid, with its value as found, never as missing. A capture time without a recorded offset stays local time, with no zone assumed.
 - **Acquisition path,** decided in Rust from the platform, the requested source and the stored file name:
 
 | Path | When | Original camera bytes |
 |---|---|---|
-| `android_camera_capture_intent` | Camera button, and the file is the capture file Pops! created (`JPEG_yyyyMMdd_HHmmss_<digits>.jpg`) | established (the camera app wrote into Pops!' own file) |
-| `android_camera_requested_picker_fallback` | Camera button, but `wry` fell back to the file picker | not established |
+| `android_camera_capture_intent` | Camera button, and the file has the name (`JPEG_yyyyMMdd_HHmmss_<digits>.jpg`) and a creation time (at most 15 minutes before recording) of the file Pops! asks the camera app to write | indicated: the WebView doesn't report which app delivered the file, and other camera apps use the same naming, so this is not proof |
+| `android_camera_requested_picker_fallback` | Camera button, but `wry` fell back to the file picker, or the file is named like a capture file but its time doesn't match this capture | not established |
 | `android_content_picker` | Gallery/file button (`ACTION_GET_CONTENT`); location may have been removed by Android | not established |
 | `desktop_file_selection` | Desktop file import | not established (file as read from disk) |
 | `ios_file_chooser` | iOS (not yet characterized) | unknown |
+
+`established` is reserved for a path where the platform itself reports which component delivered the file. No current path does.
 
 These facts are kept apart from Pops!'s own GPS reading (`evidence_metadata`) and the import time (`evidence.imported_at`). Each evidence record's capture metadata is written once, atomically with a custody row and a hash-linked audit entry. The camera rules describe `wry` 0.57.0's Android file chooser, and a test fails if `wry` changes so they get re-verified. EXIF values can be edited before import; they are supporting context, not proof of presence.
 

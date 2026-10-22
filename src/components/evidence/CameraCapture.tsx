@@ -125,6 +125,9 @@ export default function CameraCapture({ onSealed, onError }: CameraCaptureProps)
                   ? 'Location could not be read; sealed without it.'
                   : 'No location attached.'}
             </span>
+            {last.captureMetadataError && (
+              <span role="alert">{`Capture metadata (EXIF and how the photo arrived) was not recorded: ${last.captureMetadataError}. The sealed original is unaffected.`}</span>
+            )}
             <code>{last.evidence.sha256}</code>
           </div>
         </div>
