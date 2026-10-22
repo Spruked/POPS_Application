@@ -198,6 +198,8 @@ jobs:
         with: { name: pops-android, path: artifact }
       - name: Fetch and verify pinned AOSP WebView 109.0.5414.123
         run: bash scripts/ci/fetch_aosp_webview.sh webview
+      - name: Build WebView provider-list overlay for the emulator image
+        run: bash scripts/ci/build_webview_provider_overlay.sh webview
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -210,13 +212,14 @@ jobs:
           target: default
           disable-animations: true
           emulator-options: -writable-system -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          script: bash scripts/ci/android_ui_api26.sh "$(find artifact -name app-universal-debug.apk | head -1)" webview/webview.apk ui-api26
+          script: bash scripts/ci/android_ui_api26.sh "$(find artifact -name app-universal-debug.apk | head -1)" webview/webview.apk ui-api26 webview/webview-provider-overlay.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pops-android-ui-api26
           path: |
             webview/webview-provenance.txt
+            webview/webview-provider-overlay.xml
             ui-api26/
 
   ios:

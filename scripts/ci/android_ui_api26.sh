@@ -11,6 +11,7 @@ set -euo pipefail
 APP_APK="$1"
 WEBVIEW_APK="$2"
 OUT="${3:-ui-api26}"
+OVERLAY_APK="${4:-}"   # provider-list overlay from build_webview_provider_overlay.sh
 PKG="com.proofofpresence.app"
 mkdir -p "$OUT"
 RESULTS="$OUT/results.txt"
@@ -36,19 +37,30 @@ adb root >/dev/null; sleep 2; adb wait-for-device; wait_for_boot
 log "stock_webview: $(webview_version)"
 adb shell dumpsys webviewupdate > "$OUT/webviewupdate-before.txt"
 
+adb remount > "$OUT/remount.txt" 2>&1 || fail "adb remount failed: $(cat "$OUT/remount.txt")"
 if adb install -r "$WEBVIEW_APK" > "$OUT/webview-install.txt" 2>&1; then
   log "webview_install: adb install -r (update)"
 else
-  # The stock image's WebView is signed with a different key: replace the system copy.
-  log "webview_install: system replace ($(tail -1 "$OUT/webview-install.txt" | tr -d '\r'))"
-  adb remount > "$OUT/remount.txt" 2>&1 || fail "adb remount failed: $(cat "$OUT/remount.txt")"
+  # The image's com.android.webview is signed with a different key: replace the system copy.
+  log "webview_install: system replace ($(grep -o 'INSTALL_FAILED_[A-Z_]*' "$OUT/webview-install.txt" | head -1))"
   SYS_APK=$(adb shell pm path com.android.webview | tr -d '\r' | sed 's/^package://' | head -1)
   [ -n "$SYS_APK" ] || fail "stock com.android.webview not found"
   adb shell rm -rf "$(dirname "$SYS_APK")/oat"
   adb push "$WEBVIEW_APK" "$SYS_APK" > /dev/null
-  adb reboot
-  adb wait-for-device; wait_for_boot
 fi
+if [ -n "$OVERLAY_APK" ]; then
+  # Static overlay adding com.android.webview to the image's WebView provider list.
+  OVERLAY_DIR=/vendor/overlay
+  adb shell "mkdir -p $OVERLAY_DIR" 2>/dev/null || OVERLAY_DIR=/system/vendor/overlay
+  adb shell "mkdir -p $OVERLAY_DIR" || fail "cannot create $OVERLAY_DIR"
+  adb push "$OVERLAY_APK" "$OVERLAY_DIR/PopsCiWebViewProvider.apk" > /dev/null
+  adb shell chmod 644 "$OVERLAY_DIR/PopsCiWebViewProvider.apk"
+  log "provider_overlay: $OVERLAY_DIR/PopsCiWebViewProvider.apk"
+fi
+adb reboot
+adb wait-for-device; wait_for_boot
+adb root >/dev/null; sleep 2; adb wait-for-device
+adb shell cmd overlay list > "$OUT/overlays.txt" 2>&1 || true
 
 adb shell dumpsys webviewupdate > "$OUT/webviewupdate-after.txt"
 ACTIVE=$(webview_version)
