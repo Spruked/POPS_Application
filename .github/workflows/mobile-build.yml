@@ -184,6 +184,41 @@ jobs:
             logcat.txt
             permissions.txt
 
+  # Android 8 (API 26) ships WebView 69; POPS requires Chrome 87+, so the smoke test
+  # above only proves the app starts. This job verifies the real interface on API 26
+  # with a pinned AOSP WebView 109 (same version as the API 33 image), installed into
+  # an AOSP emulator image. CI only: the app and its WebView requirement are unchanged.
+  android-ui-api26:
+    name: Android 8 (API 26) interface test
+    needs: android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: pops-android, path: artifact }
+      - name: Fetch and verify pinned AOSP WebView 109.0.5414.123
+        run: bash scripts/ci/fetch_aosp_webview.sh webview
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Install WebView, launch POPS, verify Case Overview and navigation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 26
+          arch: x86_64
+          target: default
+          disable-animations: true
+          emulator-options: -writable-system -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: bash scripts/ci/android_ui_api26.sh "$(find artifact -name app-universal-debug.apk | head -1)" webview/webview.apk ui-api26
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pops-android-ui-api26
+          path: |
+            webview/webview-provenance.txt
+            ui-api26/
+
   ios:
     name: iOS
     needs: validate
