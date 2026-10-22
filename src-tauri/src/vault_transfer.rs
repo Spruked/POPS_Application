@@ -324,6 +324,9 @@ pub fn prepare_staged_database(
     if check != "ok" {
         return Err(format!("Database snapshot failed SQLite integrity_check: {check}"));
     }
+    // A package from an earlier Pops! version gets the current schema before anything
+    // reads it or it replaces this device's database.
+    crate::try_migrate_schema(staged_db).map_err(|e| format!("Transfer package rejected: {e}"))?;
     // The restore entry is appended to the incoming ledger after the swap; refuse a
     // forked or broken chain now, before anything on this device is replaced.
     get_previous_ledger_hash(staged_db).map_err(|e| format!("Transfer package rejected: {e}"))?;
@@ -621,6 +624,25 @@ mod tests {
     fn package(conn: &rusqlite::Connection, root: &Path) -> (TransferManifest, Vec<u8>) {
         let (manifest, cursor) = write_package(conn, root, Cursor::new(Vec::new()), "windows", "1.0.0").unwrap();
         (manifest, cursor.into_inner())
+    }
+
+    #[test]
+    fn restoring_a_pre_s0_vault_brings_it_to_the_current_schema() {
+        let (root, conn) = desktop_vault();
+        // Make the source look like a vault from before S0: no withdrawal columns.
+        conn.execute_batch("ALTER TABLE evidence DROP COLUMN withdrawn_at; ALTER TABLE evidence DROP COLUMN withdrawn_reason;").unwrap();
+        let (_, bytes) = package(&conn, &root);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let read = read_manifest(&mut archive).unwrap();
+        let staging = temp_dir("staging-pre-s0");
+        extract_verified(&mut archive, &read, &staging).unwrap();
+        let staged = rusqlite::Connection::open(staging.join(DB_ENTRY)).unwrap();
+        prepare_staged_database(&staged, &staging, &temp_dir("phone-pre-s0").join("Vault_System")).unwrap();
+
+        let live: i64 = staged
+            .query_row("SELECT COUNT(*) FROM evidence WHERE withdrawn_at IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(live, 2);
     }
 
     #[test]
