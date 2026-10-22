@@ -276,7 +276,13 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
       };
 
       await add(evidence);
-      show('Evidence imported and preserved');
+      // C1: EXIF facts and the acquisition path, read by Rust from the stored original.
+      try {
+        await invoke('record_capture_metadata', { evidenceId, requestedSource: 'file' });
+        show('Evidence imported and preserved');
+      } catch (err) {
+        show(`Evidence imported and preserved. Capture metadata was not recorded: ${err instanceof Error ? err.message : String(err)}`);
+      }
       setIsModalOpen(false);
       setForm({ type: 'photo', title: '', description: '', date: '', tags: '', trustGlyphRisk: 'low', sourceDescription: '' });
       setFile(null);
@@ -694,7 +700,7 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
                       <button className="btn btn-ghost btn-sm" onClick={() => openEvidenceDetail(item)}>
                         <Eye size={14} /> View
                       </button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { remove(item.id); show('Evidence removed'); }}>
+                      <button className="btn btn-ghost btn-sm" title="Withdraw evidence" aria-label="Withdraw evidence" onClick={() => { remove(item.id); show('Evidence withdrawn. The original and its custody history are kept.'); }}>
                         <Trash2 size={14} />
                       </button>
                     </td>

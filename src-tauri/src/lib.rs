@@ -3,6 +3,8 @@ mod reminders;
 mod sync;
 mod google_calendar;
 mod vault_transfer;
+mod device_keys;
+mod capture_metadata;
 #[path = "mcp/research_server.rs"]
 mod research_server;
 
@@ -161,6 +163,20 @@ fn migrate_legacy_app_data(app_data: Option<PathBuf>, vault_root: &Path) -> Resu
 
 fn init_db(path: &str) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open(path).expect("open db");
+    migrate_schema(&conn);
+    conn
+}
+
+/// Brings a database from any earlier Pops! version up to the current schema. Used
+/// for this device's database at startup and for a Vault Transfer package's database
+/// before it replaces the live one, so an older vault restores into a working schema.
+/// Additive and idempotent: it only creates missing tables, columns and indexes.
+pub(crate) fn try_migrate_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| migrate_schema(conn)))
+        .map_err(|_| "The database could not be brought up to the current Pops! schema.".to_string())
+}
+
+fn migrate_schema(conn: &rusqlite::Connection) {
     conn.execute_batch(
         "BEGIN;
         CREATE TABLE IF NOT EXISTS evidence (
@@ -502,6 +518,9 @@ fn init_db(path: &str) -> rusqlite::Connection {
         [],
     );
     let _ = conn.execute("ALTER TABLE evidence ADD COLUMN imported_at TEXT", []);
+    // S0: withdrawal replaces hard delete. Withdrawn records and their originals stay.
+    let _ = conn.execute("ALTER TABLE evidence ADD COLUMN withdrawn_at TEXT", []);
+    let _ = conn.execute("ALTER TABLE evidence ADD COLUMN withdrawn_reason TEXT", []);
     let _ = conn.execute(
         "ALTER TABLE audit_ledger ADD COLUMN previous_ledger_hash TEXT",
         [],
@@ -606,7 +625,33 @@ fn init_db(path: &str) -> rusqlite::Connection {
     reminders::init_reminder_tables(&conn).expect("init reminder tables");
     sync::init_sync_tables(&conn).expect("init sync tables");
     google_calendar::init_gcal_tables(&conn).expect("init google calendar tables");
-    conn
+    // C1: EXIF facts and acquisition path, separate from Pops!'s own GPS observation
+    // (evidence_metadata) and the import time (evidence.imported_at). One row per evidence
+    // original, recorded once.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS evidence_capture_metadata (
+            evidence_id TEXT PRIMARY KEY,
+            file_sha256 TEXT NOT NULL,
+            requested_source TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            acquisition_path TEXT NOT NULL,
+            original_camera_bytes TEXT NOT NULL,
+            acquisition_basis TEXT NOT NULL,
+            location_may_be_redacted INTEGER NOT NULL,
+            exif_status TEXT NOT NULL,
+            exif_capture_time_raw TEXT,
+            exif_capture_time_offset_raw TEXT,
+            exif_capture_time TEXT,
+            exif_capture_time_status TEXT NOT NULL,
+            exif_gps_status TEXT NOT NULL,
+            exif_gps_latitude REAL,
+            exif_gps_longitude REAL,
+            extractor TEXT NOT NULL,
+            extracted_at TEXT NOT NULL,
+            record_json TEXT NOT NULL
+        );",
+    )
+    .expect("init capture metadata table");
 }
 
 // ─── Data Structures ─────────────────────────────────────────────
@@ -1809,21 +1854,80 @@ fn court_safe_incident_summary(input: &IncidentInput) -> String {
     )
 }
 
+/// The chain tip: the hashed entry that no other entry links to as its previous hash.
+/// Chain order comes from the hash links, not wall-clock `created_at`, so records moved
+/// between devices with different clocks (Vault Transfer) still append to the true tip.
+///
+/// Appending requires the hashed entries to form one linear chain: exactly one genesis
+/// (no previous hash), no entry whose previous hash is missing from the ledger, exactly
+/// one tip, and every hashed entry reachable by walking the links from the genesis.
+/// A fork, a deleted entry (including the genesis), or a detached cycle is refused, so
+/// a structurally invalid ledger is never silently continued. Unhashed rows from before
+/// hash-linking existed are not part of the chain and are ignored here, as before;
+/// Verify Ledger still reports them.
 fn get_previous_ledger_hash(conn: &rusqlite::Connection) -> Result<Option<String>, String> {
-    let mut stmt = conn
+    let count = |sql: &str| -> Result<i64, String> {
+        conn.query_row(sql, [], |row| row.get(0)).map_err(|e| e.to_string())
+    };
+    let hashed = count("SELECT COUNT(*) FROM audit_ledger WHERE ledger_entry_hash IS NOT NULL")?;
+    if hashed == 0 {
+        return Ok(None);
+    }
+    let genesis = count(
+        "SELECT COUNT(*) FROM audit_ledger
+         WHERE ledger_entry_hash IS NOT NULL AND previous_ledger_hash IS NULL",
+    )?;
+    let dangling = count(
+        "SELECT COUNT(*) FROM audit_ledger a
+         WHERE a.ledger_entry_hash IS NOT NULL
+           AND a.previous_ledger_hash IS NOT NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM audit_ledger p
+               WHERE p.ledger_entry_hash = a.previous_ledger_hash
+           )",
+    )?;
+    let tips: Vec<String> = conn
         .prepare(
-            "SELECT ledger_entry_hash
-             FROM audit_ledger
-             WHERE ledger_entry_hash IS NOT NULL
-             ORDER BY created_at DESC, id DESC
-             LIMIT 1",
+            "SELECT a.ledger_entry_hash
+             FROM audit_ledger a
+             WHERE a.ledger_entry_hash IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM audit_ledger b
+                   WHERE b.previous_ledger_hash = a.ledger_entry_hash
+               )
+             LIMIT 2",
         )
+        .and_then(|mut stmt| stmt.query_map([], |row| row.get(0))?.collect())
         .map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    if let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        row.get(0).map_err(|e| e.to_string())
+    // Entries reachable from the genesis by following the links. UNION stops on repeats,
+    // so the walk always terminates.
+    let reachable = if genesis == 1 {
+        count(
+            "WITH RECURSIVE chain(id, entry_hash) AS (
+                 SELECT id, ledger_entry_hash FROM audit_ledger
+                 WHERE ledger_entry_hash IS NOT NULL AND previous_ledger_hash IS NULL
+                 UNION
+                 SELECT a.id, a.ledger_entry_hash FROM audit_ledger a
+                 JOIN chain c ON a.previous_ledger_hash = c.entry_hash
+                 WHERE a.ledger_entry_hash IS NOT NULL
+             )
+             SELECT COUNT(*) FROM chain",
+        )?
     } else {
-        Ok(None)
+        0
+    };
+
+    match tips.as_slice() {
+        [tip] if genesis == 1 && dangling == 0 && reachable == hashed => Ok(Some(tip.clone())),
+        _ => Err(format!(
+            "Audit ledger chain is not linear ({} tip(s), {} genesis entr{}, {} missing predecessor(s), {} of {} entries reachable from the genesis). No entry was appended. Run Verify Ledger and resolve the breach before recording more changes.",
+            tips.len(),
+            genesis,
+            if genesis == 1 { "y" } else { "ies" },
+            dangling,
+            reachable,
+            hashed
+        )),
     }
 }
 
@@ -1869,122 +1973,467 @@ fn insert_evidence_chain(
     Ok(())
 }
 
-#[tauri::command]
-fn save_evidence(db: State<DbConn>, item: EvidenceItem) -> Result<(), String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
+// ─── Sync Engine S0: atomic evidence mutations ──────────────────────────────
+
+/// Runs `write` inside one `BEGIN IMMEDIATE` transaction. Every row it writes (the
+/// record, its legacy custody row and its hash-linked audit entry) commits together,
+/// or nothing does. A refused ledger append (G1) therefore never leaves an unaudited
+/// change behind.
+fn commit_mutation<T>(
+    conn: &rusqlite::Connection,
+    write: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
+        .map_err(|e| e.to_string())?;
+    let result = write(&tx)?; // dropping `tx` on error rolls everything back
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(result)
+}
+
+/// Appends one hash-linked audit-ledger entry for an evidence action.
+fn append_evidence_audit(
+    conn: &rusqlite::Connection,
+    evidence_id: &str,
+    action: &str,
+    content_hash: &str,
+    custody_metadata_json: &str,
+) -> Result<(), String> {
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let custody: serde_json::Value = serde_json::from_str(custody_metadata_json)
+        .unwrap_or_else(|_| serde_json::Value::String(custody_metadata_json.to_string()));
     let metadata_json = serde_json::json!({
-        "evidence_id": &item.id,
-        "action": "EVIDENCE_SAVED",
-        "title": &item.title,
-        "type": &item.ev_type,
-        "file_name": &item.file_name,
-        "file_size": &item.file_size,
-        "file_type": &item.file_type,
-        "trust_glyph_risk": &item.trust_glyph_risk,
-        "source_description": &item.source_description,
-        "original_modified_at": &item.original_modified_at,
-        "imported_at": &item.imported_at,
+        "record_type": "evidence",
+        "evidence_id": evidence_id,
+        "action": action,
+        "content_hash": content_hash,
+        "custody": custody,
     })
     .to_string();
-
+    let payload_hash = sha256_hex(metadata_json.as_bytes());
+    let previous = get_previous_ledger_hash(conn)?;
+    let entry_hash = ledger_entry_hash(evidence_id, action, &payload_hash, &created_at, &metadata_json, previous.as_deref());
     conn.execute(
-        "INSERT OR REPLACE INTO evidence (
-            id, case_id, type, title, description, date, file_path, sha256, tags,
-            file_name, file_size, file_type, trust_glyph_risk,
-            source_description, original_modified_at, imported_at, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        "INSERT INTO audit_ledger (
+            id, record_id, action, payload_hash, hash, created_at, metadata_json,
+            previous_ledger_hash, ledger_entry_hash
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         rusqlite::params![
-            &item.id,
-            &item.case_id,
-            &item.ev_type,
-            &item.title,
-            &item.description,
-            &item.date,
-            &item.file_path,
-            &item.sha256,
-            item.tags.join(","),
-            &item.file_name,
-            &item.file_size,
-            &item.file_type,
-            &item.trust_glyph_risk,
-            &item.source_description,
-            &item.original_modified_at,
-            &item.imported_at,
-            &item.created_at
+            uuid::Uuid::new_v4().to_string(),
+            evidence_id,
+            action,
+            &payload_hash,
+            &payload_hash,
+            &created_at,
+            &metadata_json,
+            &previous,
+            &entry_hash,
         ],
     )
     .map_err(|e| e.to_string())?;
-    insert_evidence_chain(
-        &conn,
-        &item.id,
-        "EVIDENCE_SAVED",
-        &item.sha256,
-        metadata_json,
-    )?;
     Ok(())
+}
+
+/// The custody row (legacy `evidence_chain`) and its audit entry, inside a caller's transaction.
+fn write_evidence_action(
+    conn: &rusqlite::Connection,
+    evidence_id: &str,
+    action: &str,
+    hash: &str,
+    metadata_json: String,
+) -> Result<(), String> {
+    insert_evidence_chain(conn, evidence_id, action, hash, metadata_json.clone())?;
+    append_evidence_audit(conn, evidence_id, action, hash, &metadata_json)
+}
+
+/// One evidence custody action as its own atomic commit.
+fn record_evidence_action(
+    conn: &rusqlite::Connection,
+    evidence_id: &str,
+    action: &str,
+    hash: &str,
+    metadata_json: String,
+) -> Result<(), String> {
+    commit_mutation(conn, |tx| write_evidence_action(tx, evidence_id, action, hash, metadata_json))
+}
+
+const EVIDENCE_COLUMNS: &str = "id, case_id, type, title, description, date, file_path, sha256, tags,
+    file_name, file_size, file_type, trust_glyph_risk,
+    source_description, original_modified_at, imported_at, created_at";
+
+fn evidence_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<EvidenceItem> {
+    let tags_raw: String = row.get(8)?;
+    Ok(EvidenceItem {
+        id: row.get(0)?,
+        case_id: row.get(1)?,
+        ev_type: row.get(2)?,
+        title: row.get(3)?,
+        description: row.get(4)?,
+        date: row.get(5)?,
+        file_path: row.get(6)?,
+        sha256: row.get(7)?,
+        tags: tags_raw
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect(),
+        file_name: row.get(9)?,
+        file_size: row.get(10)?,
+        file_type: row.get(11)?,
+        trust_glyph_risk: row.get(12)?,
+        source_description: row.get(13)?,
+        original_modified_at: row.get(14)?,
+        imported_at: row.get(15)?,
+        created_at: row.get(16)?,
+    })
+}
+
+/// Capture facts are fixed once an evidence record is committed (spec §2). Returns the
+/// names of any that `proposed` would change.
+fn changed_capture_facts(existing: &EvidenceItem, proposed: &EvidenceItem) -> Vec<&'static str> {
+    let mut changed = Vec::new();
+    if existing.sha256 != proposed.sha256 { changed.push("sha256"); }
+    if existing.file_path != proposed.file_path { changed.push("filePath"); }
+    if existing.file_name != proposed.file_name { changed.push("fileName"); }
+    if existing.file_size != proposed.file_size { changed.push("fileSize"); }
+    if existing.file_type != proposed.file_type { changed.push("fileType"); }
+    if existing.ev_type != proposed.ev_type { changed.push("type"); }
+    if existing.source_description != proposed.source_description { changed.push("sourceDescription"); }
+    if existing.original_modified_at != proposed.original_modified_at { changed.push("originalModifiedAt"); }
+    if existing.imported_at != proposed.imported_at { changed.push("importedAt"); }
+    if existing.created_at != proposed.created_at { changed.push("createdAt"); }
+    changed
+}
+
+#[tauri::command]
+fn save_evidence(db: State<DbConn>, item: EvidenceItem) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    save_evidence_on(&conn, item)
+}
+
+fn save_evidence_on(conn: &rusqlite::Connection, item: EvidenceItem) -> Result<(), String> {
+    use rusqlite::OptionalExtension;
+    let existing: Option<(EvidenceItem, Option<String>)> = conn
+        .query_row(
+            &format!("SELECT {EVIDENCE_COLUMNS}, withdrawn_at FROM evidence WHERE id = ?1"),
+            [&item.id],
+            |row| Ok((evidence_row(row)?, row.get(17)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    let Some((existing, withdrawn_at)) = existing else {
+        // New record: capture facts and annotations, its custody row and audit entry, together.
+        let metadata_json = serde_json::json!({
+            "evidence_id": &item.id,
+            "action": "EVIDENCE_SAVED",
+            "title": &item.title,
+            "type": &item.ev_type,
+            "file_name": &item.file_name,
+            "file_size": &item.file_size,
+            "file_type": &item.file_type,
+            "trust_glyph_risk": &item.trust_glyph_risk,
+            "source_description": &item.source_description,
+            "original_modified_at": &item.original_modified_at,
+            "imported_at": &item.imported_at,
+        })
+        .to_string();
+        return commit_mutation(conn, |tx| {
+            tx.execute(
+                "INSERT INTO evidence (
+                    id, case_id, type, title, description, date, file_path, sha256, tags,
+                    file_name, file_size, file_type, trust_glyph_risk,
+                    source_description, original_modified_at, imported_at, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                rusqlite::params![
+                    &item.id,
+                    &item.case_id,
+                    &item.ev_type,
+                    &item.title,
+                    &item.description,
+                    &item.date,
+                    &item.file_path,
+                    &item.sha256,
+                    item.tags.join(","),
+                    &item.file_name,
+                    &item.file_size,
+                    &item.file_type,
+                    &item.trust_glyph_risk,
+                    &item.source_description,
+                    &item.original_modified_at,
+                    &item.imported_at,
+                    &item.created_at
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            write_evidence_action(tx, &item.id, "EVIDENCE_SAVED", &item.sha256, metadata_json)
+        });
+    };
+
+    if withdrawn_at.is_some() {
+        return Err("This evidence record has been withdrawn and can't be edited. Nothing was saved.".into());
+    }
+    let changed = changed_capture_facts(&existing, &item);
+    if !changed.is_empty() {
+        return Err(format!(
+            "Evidence capture facts can't be changed after they are recorded ({}). Nothing was saved.",
+            changed.join(", ")
+        ));
+    }
+    let annotations = |e: &EvidenceItem| {
+        serde_json::json!({
+            "case_id": e.case_id,
+            "title": e.title,
+            "description": e.description,
+            "date": e.date,
+            "tags": e.tags,
+            "trust_glyph_risk": e.trust_glyph_risk,
+        })
+    };
+    let (before, after) = (annotations(&existing), annotations(&item));
+    if before == after {
+        return Ok(()); // nothing changed; no empty audit entry
+    }
+    let metadata_json = serde_json::json!({
+        "evidence_id": &item.id,
+        "action": "EVIDENCE_ANNOTATED",
+        "previous": before,
+        "current": after,
+    })
+    .to_string();
+    commit_mutation(conn, |tx| {
+        tx.execute(
+            "UPDATE evidence SET case_id = ?2, title = ?3, description = ?4, date = ?5, tags = ?6, trust_glyph_risk = ?7
+             WHERE id = ?1",
+            rusqlite::params![
+                &item.id,
+                &item.case_id,
+                &item.title,
+                &item.description,
+                &item.date,
+                item.tags.join(","),
+                &item.trust_glyph_risk
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        write_evidence_action(tx, &item.id, "EVIDENCE_ANNOTATED", &existing.sha256, metadata_json)
+    })
 }
 
 #[tauri::command]
 fn get_evidence(db: State<DbConn>) -> Result<Vec<EvidenceItem>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+    list_live_evidence(&conn)
+}
+
+fn list_live_evidence(conn: &rusqlite::Connection) -> Result<Vec<EvidenceItem>, String> {
     let mut stmt = conn
-        .prepare(
-            "SELECT id, case_id, type, title, description, date, file_path, sha256, tags,
-            file_name, file_size, file_type, trust_glyph_risk,
-            source_description, original_modified_at, imported_at, created_at
-         FROM evidence ORDER BY created_at DESC",
+        .prepare(&format!(
+            "SELECT {EVIDENCE_COLUMNS} FROM evidence WHERE withdrawn_at IS NULL ORDER BY created_at DESC"
+        ))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], evidence_row).map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+}
+
+/// C1: records EXIF facts and the acquisition path for one evidence original. Reads the
+/// stored original (never a caller-supplied path or hash), refuses if its bytes no longer
+/// match the recorded SHA-256, parses read-only, and commits the record with its custody
+/// row and audit entry in one transaction. Recorded once per evidence record.
+#[tauri::command]
+fn record_capture_metadata(db: State<DbConn>, evidence_id: String, requested_source: String) -> Result<serde_json::Value, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    record_capture_metadata_on(&conn, &evidence_id, &requested_source, std::env::consts::OS, chrono::Local::now().naive_local())
+}
+
+fn record_capture_metadata_on(
+    conn: &rusqlite::Connection,
+    evidence_id: &str,
+    requested_source: &str,
+    platform: &str,
+    recorded_at_local: chrono::NaiveDateTime,
+) -> Result<serde_json::Value, String> {
+    use rusqlite::OptionalExtension;
+    let found: Option<(Option<String>, String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT file_path, sha256, file_name, withdrawn_at FROM evidence WHERE id = ?1",
+            [evidence_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some((file_path, recorded_sha, file_name, withdrawn_at)) = found else {
+        return Err("Evidence record not found. Nothing was recorded.".into());
+    };
+    if withdrawn_at.is_some() {
+        return Err("This evidence record has been withdrawn. Nothing was recorded.".into());
+    }
+    let Some(file_path) = file_path else {
+        return Err("This evidence record has no original file. Nothing was recorded.".into());
+    };
+    let bytes = fs::read(&file_path).map_err(|e| format!("Could not read the stored original: {e}. Nothing was recorded."))?;
+    let actual_sha = sha256_hex(&bytes);
+    if actual_sha != recorded_sha {
+        record_evidence_action(
+            conn,
+            evidence_id,
+            "HASH_MISMATCH",
+            &actual_sha,
+            serde_json::json!({
+                "evidence_id": evidence_id,
+                "action": "HASH_MISMATCH",
+                "context": "capture metadata extraction",
+                "expected_hash": recorded_sha,
+                "actual_hash": actual_sha,
+            })
+            .to_string(),
+        )?;
+        return Err("The stored original no longer matches its recorded SHA-256. Capture metadata was not recorded; the mismatch was logged.".into());
+    }
+
+    let facts = capture_metadata::extract(&bytes);
+    let acquisition = capture_metadata::classify(requested_source, platform, file_name.as_deref(), recorded_at_local)?;
+    let record = serde_json::json!({
+        "evidenceId": evidence_id,
+        "fileSha256": actual_sha,
+        "acquisition": acquisition,
+        "exif": facts,
+        "extractor": capture_metadata::EXTRACTOR,
+    });
+
+    let existing: Option<String> = conn
+        .query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [evidence_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some(existing) = existing {
+        let existing: serde_json::Value = serde_json::from_str(&existing).map_err(|e| e.to_string())?;
+        if existing == record {
+            return Ok(serde_json::json!({ "alreadyRecorded": true, "record": existing }));
+        }
+        return Err("Capture metadata for this evidence is already recorded and can't be replaced. Nothing was saved.".into());
+    }
+
+    let extracted_at = chrono::Utc::now().to_rfc3339();
+    let record_json = record.to_string();
+    commit_mutation(conn, |tx| {
+        tx.execute(
+            "INSERT INTO evidence_capture_metadata (
+                evidence_id, file_sha256, requested_source, platform, acquisition_path,
+                original_camera_bytes, acquisition_basis, location_may_be_redacted,
+                exif_status, exif_capture_time_raw, exif_capture_time_offset_raw, exif_capture_time,
+                exif_capture_time_status, exif_gps_status, exif_gps_latitude, exif_gps_longitude,
+                extractor, extracted_at, record_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            rusqlite::params![
+                evidence_id,
+                &actual_sha,
+                &acquisition.requested_source,
+                &acquisition.platform,
+                &acquisition.acquisition_path,
+                &acquisition.original_camera_bytes,
+                &acquisition.basis,
+                acquisition.location_may_be_redacted as i64,
+                &facts.status,
+                &facts.capture_time_raw,
+                &facts.capture_time_offset_raw,
+                &facts.capture_time,
+                &facts.capture_time_status,
+                &facts.gps_status,
+                &facts.gps_latitude,
+                &facts.gps_longitude,
+                capture_metadata::EXTRACTOR,
+                &extracted_at,
+                &record_json,
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        write_evidence_action(
+            tx,
+            evidence_id,
+            "CAPTURE_METADATA_RECORDED",
+            &actual_sha,
+            serde_json::json!({ "evidence_id": evidence_id, "action": "CAPTURE_METADATA_RECORDED", "record": record }).to_string(),
+        )
+    })?;
+    Ok(serde_json::json!({ "alreadyRecorded": false, "record": record }))
+}
+
+/// C1: the recorded capture metadata for one evidence record, if any.
+#[tauri::command]
+fn get_capture_metadata(db: State<DbConn>, evidence_id: String) -> Result<Option<serde_json::Value>, String> {
+    use rusqlite::OptionalExtension;
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let raw: Option<String> = conn
+        .query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [&evidence_id], |r| r.get(0))
+        .optional()
+        .map_err(|e| e.to_string())?;
+    raw.map(|r| serde_json::from_str(&r).map_err(|e| e.to_string())).transpose()
+}
+
+/// This installation's signing identity (S0). Release builds report that no OS-backed
+/// key store exists yet instead of creating an unprotected key (D4).
+#[tauri::command]
+fn get_device_identity(vault: State<VaultRoot>) -> Result<device_keys::DeviceIdentity, String> {
+    device_keys::identity(device_keys::store_for(&vault.0).as_ref())
+}
+
+/// Withdrawn evidence: hidden from everyday views, never deleted (S0).
+#[tauri::command]
+fn get_withdrawn_evidence(db: State<DbConn>) -> Result<Vec<serde_json::Value>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT {EVIDENCE_COLUMNS}, withdrawn_at, withdrawn_reason FROM evidence
+             WHERE withdrawn_at IS NOT NULL ORDER BY withdrawn_at DESC"
+        ))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |row| {
-            let tags_raw: String = row.get(8)?;
-            Ok(EvidenceItem {
-                id: row.get(0)?,
-                case_id: row.get(1)?,
-                ev_type: row.get(2)?,
-                title: row.get(3)?,
-                description: row.get(4)?,
-                date: row.get(5)?,
-                file_path: row.get(6)?,
-                sha256: row.get(7)?,
-                tags: tags_raw
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect(),
-                file_name: row.get(9)?,
-                file_size: row.get(10)?,
-                file_type: row.get(11)?,
-                trust_glyph_risk: row.get(12)?,
-                source_description: row.get(13)?,
-                original_modified_at: row.get(14)?,
-                imported_at: row.get(15)?,
-                created_at: row.get(16)?,
-            })
+            let item = evidence_row(row)?;
+            let withdrawn_at: String = row.get(17)?;
+            let reason: Option<String> = row.get(18)?;
+            Ok(serde_json::json!({ "evidence": item, "withdrawnAt": withdrawn_at, "withdrawnReason": reason }))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 fn delete_evidence(db: State<DbConn>, id: String) -> Result<(), String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let existing_hash: Option<String> = conn
-        .query_row("SELECT sha256 FROM evidence WHERE id = ?1", [&id], |row| {
-            row.get(0)
-        })
-        .ok();
-    conn.execute("DELETE FROM evidence WHERE id = ?1", [&id])
+    withdraw_evidence_on(&conn, id)
+}
+
+fn withdraw_evidence_on(conn: &rusqlite::Connection, id: String) -> Result<(), String> {
+    // S0: evidence is withdrawn, never deleted. The record, its original file, its
+    // metadata and its custody history all remain; it is hidden from everyday views.
+    use rusqlite::OptionalExtension;
+    let found: Option<(String, Option<String>)> = conn
+        .query_row("SELECT sha256, withdrawn_at FROM evidence WHERE id = ?1", [&id], |row| Ok((row.get(0)?, row.get(1)?)))
+        .optional()
         .map_err(|e| e.to_string())?;
-    let hash = existing_hash.unwrap_or_else(|| "unknown".to_string());
+    let Some((hash, withdrawn_at)) = found else {
+        return Err("Evidence record not found. Nothing was changed.".into());
+    };
+    if withdrawn_at.is_some() {
+        return Ok(()); // already withdrawn
+    }
+    let now = chrono::Utc::now().to_rfc3339();
     let metadata_json = serde_json::json!({
         "evidence_id": id,
-        "action": "EVIDENCE_DELETED"
+        "action": "EVIDENCE_WITHDRAWN",
+        "withdrawn_at": now,
+        "original_retained": true,
     })
     .to_string();
-    insert_evidence_chain(&conn, &id, "EVIDENCE_DELETED", &hash, metadata_json)?;
-    Ok(())
+    commit_mutation(conn, |tx| {
+        tx.execute(
+            "UPDATE evidence SET withdrawn_at = ?2, withdrawn_reason = 'Withdrawn by the user on this device' WHERE id = ?1",
+            rusqlite::params![&id, &now],
+        )
+        .map_err(|e| e.to_string())?;
+        write_evidence_action(tx, &id, "EVIDENCE_WITHDRAWN", &hash, metadata_json)
+    })
 }
 
 #[tauri::command]
@@ -2021,27 +2470,44 @@ fn get_evidence_chain(
 #[tauri::command]
 fn submit_evidence(db: State<DbConn>, payload: String) -> Result<String, String> {
     let input: EvidencePayload = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
-    let timestamp_utc = chrono::Utc::now().to_rfc3339();
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT OR REPLACE INTO evidence_metadata (
-            evidence_id, document_id, file_hash, file_path, exif_json,
-            gps_lat, gps_lon, device_identity, timestamp_utc
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![
-            &input.evidence_id,
-            &input.document_id,
-            &input.file_hash,
-            &input.file_path,
-            &input.exif_json,
-            &input.gps_lat,
-            &input.gps_lon,
-            &input.device_identity,
-            &timestamp_utc
-        ],
-    )
-    .map_err(|e| e.to_string())?;
+    submit_evidence_on(&conn, input)
+}
 
+fn submit_evidence_on(conn: &rusqlite::Connection, input: EvidencePayload) -> Result<String, String> {
+    use rusqlite::OptionalExtension;
+
+    // Capture metadata (device-reported location and capture context) is recorded once.
+    let existing: Option<(String, String, String, String, Option<f64>, Option<f64>, String, String)> = conn
+        .query_row(
+            "SELECT document_id, file_hash, file_path, exif_json, gps_lat, gps_lon, device_identity, timestamp_utc
+             FROM evidence_metadata WHERE evidence_id = ?1",
+            [&input.evidence_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if let Some((document_id, file_hash, file_path, exif_json, gps_lat, gps_lon, device_identity, timestamp_utc)) = existing {
+        let same = document_id == input.document_id
+            && file_hash == input.file_hash
+            && file_path == input.file_path
+            && exif_json == input.exif_json
+            && gps_lat == input.gps_lat
+            && gps_lon == input.gps_lon
+            && device_identity == input.device_identity;
+        if !same {
+            return Err("Capture metadata for this evidence is already recorded and can't be replaced. Nothing was saved.".into());
+        }
+        return Ok(serde_json::json!({
+            "success": true,
+            "evidence_id": input.evidence_id,
+            "timestamp_utc": timestamp_utc,
+            "already_recorded": true
+        })
+        .to_string());
+    }
+
+    let timestamp_utc = chrono::Utc::now().to_rfc3339();
     let metadata_json = serde_json::json!({
         "document_id": input.document_id,
         "file_path": input.file_path,
@@ -2049,13 +2515,27 @@ fn submit_evidence(db: State<DbConn>, payload: String) -> Result<String, String>
         "timestamp_utc": timestamp_utc,
     })
     .to_string();
-    insert_evidence_chain(
-        &conn,
-        &input.evidence_id,
-        "EVIDENCE_METADATA_SUBMITTED",
-        &input.file_hash,
-        metadata_json,
-    )?;
+    commit_mutation(conn, |tx| {
+        tx.execute(
+            "INSERT INTO evidence_metadata (
+                evidence_id, document_id, file_hash, file_path, exif_json,
+                gps_lat, gps_lon, device_identity, timestamp_utc
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            rusqlite::params![
+                &input.evidence_id,
+                &input.document_id,
+                &input.file_hash,
+                &input.file_path,
+                &input.exif_json,
+                &input.gps_lat,
+                &input.gps_lon,
+                &input.device_identity,
+                &timestamp_utc
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+        write_evidence_action(tx, &input.evidence_id, "EVIDENCE_METADATA_SUBMITTED", &input.file_hash, metadata_json)
+    })?;
 
     Ok(serde_json::json!({
         "success": true,
@@ -2143,7 +2623,7 @@ fn record_chain_of_custody(db: State<DbConn>, payload: String) -> Result<String,
     })
     .to_string();
     let chain_hash = sha256_hex(metadata_json.as_bytes());
-    insert_evidence_chain(
+    record_evidence_action(
         &conn,
         &input.evidence_id,
         "CHAIN_OF_CUSTODY_RECORDED",
@@ -2338,7 +2818,7 @@ fn get_case_overview_data(db: State<DbConn>) -> Result<CaseOverviewDataResult, S
     let alerts = alert_rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
     let active_order_count = table_count(&conn, "court_orders")?;
     let upcoming_deadline_count = conn.query_row("SELECT COUNT(*) FROM case_matters WHERE next_deadline <> '' OR next_hearing_date <> ''", [], |row| row.get::<_, i64>(0)).map_err(|e| e.to_string())? as usize;
-    let cross_case_evidence_count = conn.query_row("SELECT COUNT(*) FROM evidence", [], |row| row.get::<_, i64>(0)).map_err(|e| e.to_string())? as usize;
+    let cross_case_evidence_count = conn.query_row("SELECT COUNT(*) FROM evidence WHERE withdrawn_at IS NULL", [], |row| row.get::<_, i64>(0)).map_err(|e| e.to_string())? as usize;
     Ok(CaseOverviewDataResult { primary_case, related_cases, alerts, active_order_count, upcoming_deadline_count, cross_case_evidence_count })
 }
 
@@ -3308,7 +3788,7 @@ fn get_glyph_trace_records(
     }
 
     let mut evidence_stmt = conn
-        .prepare("SELECT id, title, created_at FROM evidence ORDER BY created_at DESC")
+        .prepare("SELECT id, title, created_at FROM evidence WHERE withdrawn_at IS NULL ORDER BY created_at DESC")
         .map_err(|e| e.to_string())?;
     let evidence_rows = evidence_stmt
         .query_map([], |row| {
@@ -4368,6 +4848,10 @@ fn get_audit_ledger(db: State<DbConn>) -> Result<Vec<AuditLedgerItem>, String> {
 #[tauri::command]
 fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
+    verify_audit_ledger_conn(&conn)
+}
+
+fn verify_audit_ledger_conn(conn: &rusqlite::Connection) -> Result<LedgerIntegrityStatus, String> {
     let mut stmt = conn
         .prepare(
             "SELECT id, record_id, action, COALESCE(payload_hash, hash), created_at,
@@ -4390,10 +4874,36 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
             ))
         })
         .map_err(|e| e.to_string())?;
+    let rows: Vec<_> = rows.collect::<Result<_, _>>().map_err(|e| e.to_string())?;
 
+    // Walk the chain by its hash links (genesis -> tip), independent of wall-clock order.
+    // `created_at` order is kept only to make breach reporting deterministic.
+    let mut successors: std::collections::HashMap<Option<String>, Vec<usize>> = std::collections::HashMap::new();
+    for (index, row) in rows.iter().enumerate() {
+        successors.entry(row.6.clone()).or_default().push(index);
+    }
+    let breach = |checked_rows: usize, id: &str| LedgerIntegrityStatus {
+        status: "BREACH".to_string(),
+        checked_rows,
+        breach_row_id: Some(id.to_string()),
+        message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
+    };
+
+    let mut visited = vec![false; rows.len()];
     let mut previous: Option<String> = None;
     let mut checked_rows = 0usize;
-    for row in rows {
+    loop {
+        let next = successors.get(&previous).map(Vec::as_slice).unwrap_or(&[]);
+        let index = match next {
+            [] => break,
+            [only] => *only,
+            // Two entries claim the same predecessor: the chain was forked or spliced.
+            [_, second, ..] => return Ok(breach(checked_rows, &rows[*second].0)),
+        };
+        if visited[index] {
+            return Ok(breach(checked_rows, &rows[index].0));
+        }
+        visited[index] = true;
         let (
             id,
             record_id,
@@ -4401,18 +4911,9 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
             payload_hash,
             created_at,
             metadata_json,
-            previous_ledger_hash,
+            _previous_ledger_hash,
             ledger_hash,
-        ) = row.map_err(|e| e.to_string())?;
-
-        if previous_ledger_hash != previous {
-            return Ok(LedgerIntegrityStatus {
-                status: "BREACH".to_string(),
-                checked_rows,
-                breach_row_id: Some(id),
-                message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
-            });
-        }
+        ) = &rows[index];
 
         let expected_hash = ledger_entry_hash(
             &record_id,
@@ -4424,16 +4925,16 @@ fn verify_audit_ledger(db: State<DbConn>) -> Result<LedgerIntegrityStatus, Strin
         );
 
         if ledger_hash.as_deref() != Some(expected_hash.as_str()) {
-            return Ok(LedgerIntegrityStatus {
-                status: "BREACH".to_string(),
-                checked_rows,
-                breach_row_id: Some(id),
-                message: "Integrity Alert: Audit Ledger Breach Detected".to_string(),
-            });
+            return Ok(breach(checked_rows, id));
         }
 
         previous = Some(expected_hash);
         checked_rows += 1;
+    }
+
+    // Any entry not reachable from genesis (missing link, deleted predecessor) is a breach.
+    if let Some(orphan) = rows.iter().zip(&visited).find(|(_, seen)| !**seen) {
+        return Ok(breach(checked_rows, &orphan.0 .0));
     }
 
     Ok(LedgerIntegrityStatus {
@@ -4495,7 +4996,7 @@ fn verify_evidence_integrity(
             "expected_hash": expected_hash,
         })
         .to_string();
-        insert_evidence_chain(
+        record_evidence_action(
             &conn,
             &evidence_id,
             "MISSING_FILE",
@@ -4519,7 +5020,7 @@ fn verify_evidence_integrity(
                 "expected_hash": expected_hash,
             })
             .to_string();
-            insert_evidence_chain(
+            record_evidence_action(
                 &conn,
                 &evidence_id,
                 "MISSING_FILE",
@@ -4548,7 +5049,7 @@ fn verify_evidence_integrity(
         "actual_hash": actual_hash,
     })
     .to_string();
-    insert_evidence_chain(&conn, &evidence_id, action, &actual_hash, metadata_json)?;
+    record_evidence_action(&conn, &evidence_id, action, &actual_hash, metadata_json)?;
 
     Ok(IntegrityCheckResult {
         status: status.to_string(),
@@ -4619,81 +5120,6 @@ fn import_communication_export(
     let file_path_string = file_path.to_string_lossy().to_string();
 
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.execute(
-        "INSERT INTO communication_records (
-            id, evidence_id, timeline_event_id, incident_id, title, file_path,
-            file_name, file_type, file_size, original_hash, imported_at,
-            message_count, first_timestamp, last_timestamp, participants_json,
-            gaps_json, screenshot_risk, trust_glyph_risk, court_safe_summary,
-            thread_context_json
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
-        rusqlite::params![
-            &communication_id,
-            &evidence_id,
-            &timeline_event_id,
-            &incident_id,
-            &title,
-            &file_path_string,
-            &file_name,
-            &file_type,
-            bytes.len() as i64,
-            &original_hash,
-            &imported_at,
-            messages.len() as i64,
-            &first_timestamp,
-            &last_timestamp,
-            &participants_json,
-            &gaps_json,
-            &screenshot_risk,
-            &trust_glyph_risk,
-            &court_safe_summary,
-            &thread_context_json
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "INSERT INTO evidence (
-            id, type, title, description, date, file_path, sha256, tags,
-            file_name, file_size, file_type, trust_glyph_risk,
-            source_description, original_modified_at, imported_at, created_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
-        rusqlite::params![
-            &evidence_id,
-            "document",
-            &title,
-            &court_safe_summary,
-            first_timestamp.as_deref().unwrap_or(&imported_at),
-            &file_path_string,
-            &original_hash,
-            "communication,message-export",
-            &file_name,
-            bytes.len() as i64,
-            &file_type,
-            &trust_glyph_risk,
-            "Communication evidence import",
-            Option::<String>::None,
-            &imported_at,
-            &imported_at
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-
-    conn.execute(
-        "INSERT INTO events (id, type, title, date, description, related_evidence_ids, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        rusqlite::params![
-            &timeline_event_id,
-            "communication",
-            &title,
-            first_timestamp.as_deref().unwrap_or(&imported_at),
-            &court_safe_summary,
-            &evidence_id,
-            &imported_at
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-
     let metadata_json = serde_json::json!({
         "communication_id": communication_id,
         "evidence_id": evidence_id,
@@ -4710,13 +5136,92 @@ fn import_communication_export(
         "trust_glyph_risk": trust_glyph_risk,
     })
     .to_string();
-    insert_evidence_chain(
-        &conn,
-        &evidence_id,
-        "COMMUNICATION_EXPORT_IMPORTED",
-        &original_hash,
-        metadata_json,
-    )?;
+    // S0: the communication record, evidence row, timeline event, custody row and audit
+    // entry commit together, or none of them do.
+    commit_mutation(&conn, |tx| {
+        tx.execute(
+            "INSERT INTO communication_records (
+                id, evidence_id, timeline_event_id, incident_id, title, file_path,
+                file_name, file_type, file_size, original_hash, imported_at,
+                message_count, first_timestamp, last_timestamp, participants_json,
+                gaps_json, screenshot_risk, trust_glyph_risk, court_safe_summary,
+                thread_context_json
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
+            rusqlite::params![
+                &communication_id,
+                &evidence_id,
+                &timeline_event_id,
+                &incident_id,
+                &title,
+                &file_path_string,
+                &file_name,
+                &file_type,
+                bytes.len() as i64,
+                &original_hash,
+                &imported_at,
+                messages.len() as i64,
+                &first_timestamp,
+                &last_timestamp,
+                &participants_json,
+                &gaps_json,
+                &screenshot_risk,
+                &trust_glyph_risk,
+                &court_safe_summary,
+                &thread_context_json
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        tx.execute(
+            "INSERT INTO evidence (
+                id, type, title, description, date, file_path, sha256, tags,
+                file_name, file_size, file_type, trust_glyph_risk,
+                source_description, original_modified_at, imported_at, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+            rusqlite::params![
+                &evidence_id,
+                "document",
+                &title,
+                &court_safe_summary,
+                first_timestamp.as_deref().unwrap_or(&imported_at),
+                &file_path_string,
+                &original_hash,
+                "communication,message-export",
+                &file_name,
+                bytes.len() as i64,
+                &file_type,
+                &trust_glyph_risk,
+                "Communication evidence import",
+                Option::<String>::None,
+                &imported_at,
+                &imported_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        tx.execute(
+            "INSERT INTO events (id, type, title, date, description, related_evidence_ids, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                &timeline_event_id,
+                "communication",
+                &title,
+                first_timestamp.as_deref().unwrap_or(&imported_at),
+                &court_safe_summary,
+                &evidence_id,
+                &imported_at
+            ],
+        )
+        .map_err(|e| e.to_string())?;
+
+        write_evidence_action(
+            tx,
+            &evidence_id,
+            "COMMUNICATION_EXPORT_IMPORTED",
+            &original_hash,
+            metadata_json,
+        )
+    })?;
 
     Ok(CommunicationImportResult {
         id: communication_id,
@@ -4865,6 +5370,7 @@ fn build_assistant_vault_context(
     if let Ok(mut stmt) = conn.prepare(
         "SELECT id, title, type, date, sha256, file_path
          FROM evidence
+         WHERE withdrawn_at IS NULL
          ORDER BY created_at DESC
          LIMIT 20",
     ) {
@@ -4947,6 +5453,559 @@ async fn local_agent_chat(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─── C1 capture metadata ───────────────────────────────────────────
+
+    /// Stores `bytes` as an original on disk and seals an evidence record for it.
+    fn c1_evidence(conn: &rusqlite::Connection, id: &str, name: &str, bytes: &[u8]) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pops-c1-{}", uuid::Uuid::new_v4())).join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, bytes).unwrap();
+        let mut item = s0_item(id, &sha256_hex(bytes));
+        item.file_path = Some(path.to_string_lossy().to_string());
+        item.file_name = Some(name.into());
+        item.file_size = Some(bytes.len() as i64);
+        save_evidence_on(conn, item).unwrap();
+        path
+    }
+
+    fn c1_record(conn: &rusqlite::Connection, id: &str) -> serde_json::Value {
+        let raw: String = conn.query_row("SELECT record_json FROM evidence_capture_metadata WHERE evidence_id = ?1", [id], |r| r.get(0)).unwrap();
+        serde_json::from_str(&raw).unwrap()
+    }
+
+    /// The device clock at recording time in C1 tests: three minutes after the
+    /// camera-intent file names used below.
+    fn c1_now() -> chrono::NaiveDateTime {
+        chrono::NaiveDateTime::parse_from_str("2026-10-21 16:35:00", "%Y-%m-%d %H:%M:%S").unwrap()
+    }
+
+    fn c1_photo(with_gps: bool, capture_time: &str) -> Vec<u8> {
+        use crate::capture_metadata::test_images::*;
+        use exif::Tag;
+        let mut fields = vec![
+            exif_ascii(Tag::Model, "Pixel 7"),
+            exif_ascii(Tag::DateTimeOriginal, capture_time),
+            exif_ascii(Tag::OffsetTimeOriginal, "-05:00"),
+        ];
+        if with_gps {
+            fields.push(exif_dms(Tag::GPSLatitude, 37, 5, 1512));
+            fields.push(exif_ascii(Tag::GPSLatitudeRef, "N"));
+            fields.push(exif_dms(Tag::GPSLongitude, 94, 30, 4788));
+            fields.push(exif_ascii(Tag::GPSLongitudeRef, "W"));
+        }
+        jpeg_with(&fields)
+    }
+
+    #[test]
+    fn c1_camera_capture_records_exif_and_indicated_original_without_touching_bytes() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(true, "2026:10:21 16:32:00");
+        let path = c1_evidence(&conn, "cam1", "JPEG_20261021_163200_8421390.jpg", &bytes);
+        record_capture_metadata_on(&conn, "cam1", "camera", "android", c1_now()).unwrap();
+
+        let rec = c1_record(&conn, "cam1");
+        assert_eq!(rec["acquisition"]["acquisitionPath"], "android_camera_capture_intent");
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "indicated");
+        assert_eq!(rec["exif"]["captureTime"], "2026-10-21T16:32:00-05:00");
+        assert_eq!(rec["exif"]["gpsStatus"], "present");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "received bytes must never be modified");
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 1);
+        assert_eq!(verify_audit_ledger_conn(&conn).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn c1_missing_exif_is_recorded_as_missing() {
+        let conn = init_db(":memory:");
+        let bytes = crate::capture_metadata::test_images::jpeg_without_exif();
+        let path = c1_evidence(&conn, "noexif", "screenshot.jpg", &bytes);
+        record_capture_metadata_on(&conn, "noexif", "file", "windows", c1_now()).unwrap();
+        let rec = c1_record(&conn, "noexif");
+        assert_eq!(rec["exif"]["status"], "absent");
+        assert_eq!(rec["exif"]["captureTime"], serde_json::Value::Null);
+        assert_eq!(rec["exif"]["gpsLatitude"], serde_json::Value::Null);
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "not_established");
+        let (time, lat): (Option<String>, Option<f64>) = conn
+            .query_row("SELECT exif_capture_time, exif_gps_latitude FROM evidence_capture_metadata WHERE evidence_id = 'noexif'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((time, lat), (None, None));
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn c1_stripped_gps_stays_missing_even_when_pops_has_its_own_gps() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(false, "2026:10:21 16:32:00");
+        let path = c1_evidence(&conn, "picked", "PXL_20261021_163200.jpg", &bytes);
+        // Pops!'s own observation, recorded separately at import.
+        submit_evidence_on(&conn, EvidencePayload {
+            evidence_id: "picked".into(),
+            document_id: "picked".into(),
+            file_path: path.to_string_lossy().to_string(),
+            file_hash: sha256_hex(&bytes),
+            exif_json: "{\"source\":\"device_location_at_capture\"}".into(),
+            gps_lat: Some(37.08),
+            gps_lon: Some(-94.51),
+            device_identity: "POPS android".into(),
+        })
+        .unwrap();
+        record_capture_metadata_on(&conn, "picked", "photo_library", "android", c1_now()).unwrap();
+
+        let rec = c1_record(&conn, "picked");
+        assert_eq!(rec["exif"]["gpsStatus"], "absent");
+        assert_eq!(rec["exif"]["gpsLatitude"], serde_json::Value::Null);
+        assert_eq!(rec["acquisition"]["acquisitionPath"], "android_content_picker");
+        assert_eq!(rec["acquisition"]["locationMayBeRedacted"], true);
+        assert_eq!(rec["acquisition"]["originalCameraBytes"], "not_established");
+        // The two sources stay separate: Pops!'s GPS is unchanged and not copied into EXIF facts.
+        let pops_lat: f64 = conn.query_row("SELECT gps_lat FROM evidence_metadata WHERE evidence_id = 'picked'", [], |r| r.get(0)).unwrap();
+        assert_eq!(pops_lat, 37.08);
+        let exif_lat: Option<f64> = conn.query_row("SELECT exif_gps_latitude FROM evidence_capture_metadata WHERE evidence_id = 'picked'", [], |r| r.get(0)).unwrap();
+        assert_eq!(exif_lat, None);
+    }
+
+    #[test]
+    fn c1_altered_exif_is_its_own_record_and_a_changed_original_is_refused() {
+        let conn = init_db(":memory:");
+        let original = c1_photo(true, "2026:10:21 16:32:00");
+        let altered = c1_photo(true, "2026:10:19 09:00:00"); // capture time edited before import
+        c1_evidence(&conn, "orig", "a.jpg", &original);
+        c1_evidence(&conn, "edit", "b.jpg", &altered);
+        record_capture_metadata_on(&conn, "orig", "file", "windows", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "edit", "file", "windows", c1_now()).unwrap();
+        let (a, b) = (c1_record(&conn, "orig"), c1_record(&conn, "edit"));
+        assert_ne!(a["fileSha256"], b["fileSha256"]);
+        assert_eq!(a["exif"]["captureTimeRaw"], "2026:10:21 16:32:00");
+        assert_eq!(b["exif"]["captureTimeRaw"], "2026:10:19 09:00:00");
+
+        // An original changed on disk after import is refused, logged, and nothing is recorded.
+        let path = c1_evidence(&conn, "tamper", "c.jpg", &original);
+        std::fs::write(&path, &altered).unwrap();
+        let err = record_capture_metadata_on(&conn, "tamper", "file", "windows", c1_now()).unwrap_err();
+        assert!(err.contains("no longer matches"), "{err}");
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_capture_metadata WHERE evidence_id = 'tamper'"), 0);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain WHERE evidence_id = 'tamper' AND action = 'HASH_MISMATCH'"), 1);
+    }
+
+    #[test]
+    fn c1_repeated_imports_record_separately_and_each_record_is_written_once() {
+        let conn = init_db(":memory:");
+        let bytes = c1_photo(true, "2026:10:21 16:32:00");
+        c1_evidence(&conn, "first", "JPEG_20261021_163200_1.jpg", &bytes);
+        c1_evidence(&conn, "second", "JPEG_20261021_163200_1.jpg", &bytes);
+        record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
+        record_capture_metadata_on(&conn, "second", "camera", "android", c1_now()).unwrap();
+        let (a, b) = (c1_record(&conn, "first"), c1_record(&conn, "second"));
+        assert_eq!(a["fileSha256"], b["fileSha256"]);
+        assert_eq!(a["exif"], b["exif"]);
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
+
+        let again = record_capture_metadata_on(&conn, "first", "camera", "android", c1_now()).unwrap();
+        assert_eq!(again["alreadyRecorded"], true);
+        assert_eq!(s0_audit(&conn, "CAPTURE_METADATA_RECORDED"), 2);
+        let err = record_capture_metadata_on(&conn, "first", "photo_library", "android", c1_now()).unwrap_err();
+        assert!(err.contains("can't be replaced"), "{err}");
+        assert_eq!(c1_record(&conn, "first"), a);
+    }
+
+    #[test]
+    fn c1_withdrawn_or_fileless_evidence_is_refused() {
+        let conn = init_db(":memory:");
+        c1_evidence(&conn, "w1", "a.jpg", &c1_photo(false, "2026:10:21 16:32:00"));
+        withdraw_evidence_on(&conn, "w1".into()).unwrap();
+        assert!(record_capture_metadata_on(&conn, "w1", "file", "windows", c1_now()).unwrap_err().contains("withdrawn"));
+        let mut note = s0_item("note1", "ee55");
+        note.file_path = None;
+        save_evidence_on(&conn, note).unwrap();
+        assert!(record_capture_metadata_on(&conn, "note1", "file", "windows", c1_now()).unwrap_err().contains("no original file"));
+    }
+
+    // ─── Sync Engine S0 ────────────────────────────────────────────────
+
+    fn s0_item(id: &str, sha: &str) -> EvidenceItem {
+        EvidenceItem {
+            id: id.into(),
+            case_id: "primary".into(),
+            ev_type: "photo".into(),
+            title: "Exchange photo".into(),
+            description: String::new(),
+            date: "2026-10-21".into(),
+            file_path: Some(format!("/vault/evidence_originals/{id}/photo.jpg")),
+            sha256: sha.into(),
+            tags: vec!["camera-capture".into()],
+            file_name: Some("photo.jpg".into()),
+            file_size: Some(1234),
+            file_type: Some("image/jpeg".into()),
+            trust_glyph_risk: Some("low".into()),
+            source_description: Some("Captured with the device camera in POPS (android).".into()),
+            original_modified_at: Some("2026-10-21T16:32:00Z".into()),
+            imported_at: Some("2026-10-21T16:32:05Z".into()),
+            created_at: "2026-10-21T16:32:05Z".into(),
+        }
+    }
+
+    fn s0_count(conn: &rusqlite::Connection, sql: &str) -> i64 {
+        conn.query_row(sql, [], |r| r.get(0)).unwrap()
+    }
+
+    fn s0_audit(conn: &rusqlite::Connection, action: &str) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM audit_ledger WHERE action = ?1 AND ledger_entry_hash IS NOT NULL", [action], |r| r.get(0)).unwrap()
+    }
+
+    /// Makes the ledger non-linear so every audited append is refused (G1 rule).
+    fn s0_fork_ledger(conn: &rusqlite::Connection) {
+        let genesis = append_ledger_row(conn, 900, "2026-10-01T00:00:00+00:00");
+        append_ledger_row(conn, 901, "2026-10-02T00:00:00+00:00");
+        let fork = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-10-03T00:00:00+00:00", "{}", Some(&genesis));
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES ('fork', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-10-03T00:00:00+00:00', '{}', ?1, ?2)",
+            rusqlite::params![genesis, fork],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn s0_new_evidence_commits_record_custody_and_hash_linked_audit_together() {
+        let conn = init_db(":memory:");
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap();
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence WHERE id = 'ev1'"), 1);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain WHERE evidence_id = 'ev1' AND action = 'EVIDENCE_SAVED'"), 1);
+        assert_eq!(s0_audit(&conn, "EVIDENCE_SAVED"), 1);
+        let status = verify_audit_ledger_conn(&conn).unwrap();
+        assert_eq!((status.status.as_str(), status.checked_rows), ("VERIFIED", 1));
+    }
+
+    #[test]
+    fn s0_refused_audit_append_rolls_back_the_whole_save() {
+        let conn = init_db(":memory:");
+        s0_fork_ledger(&conn);
+        let ledger_before = s0_count(&conn, "SELECT COUNT(*) FROM audit_ledger");
+        let err = save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap_err();
+        assert!(err.contains("not linear"), "{err}");
+        // Atomic: no evidence row, no custody row, no new ledger row.
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence"), 0);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain"), 0);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM audit_ledger"), ledger_before);
+        // A standalone custody action is atomic too.
+        assert!(record_evidence_action(&conn, "ev9", "HASH_VERIFIED", "aa", "{}".into()).is_err());
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain"), 0);
+    }
+
+    #[test]
+    fn s0_capture_facts_are_immutable_and_refusals_change_nothing() {
+        let conn = init_db(":memory:");
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap();
+        let (chain, audit) = (s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain"), s0_count(&conn, "SELECT COUNT(*) FROM audit_ledger"));
+
+        let mut tampered = s0_item("ev1", "bb22");
+        tampered.file_path = Some("/elsewhere/photo.jpg".into());
+        let err = save_evidence_on(&conn, tampered).unwrap_err();
+        assert!(err.contains("sha256") && err.contains("filePath") && err.contains("Nothing was saved"), "{err}");
+        let mut relabelled = s0_item("ev1", "aa11");
+        relabelled.source_description = Some("Picked from the gallery".into());
+        assert!(save_evidence_on(&conn, relabelled).unwrap_err().contains("sourceDescription"));
+
+        let (sha, path): (String, String) = conn
+            .query_row("SELECT sha256, file_path FROM evidence WHERE id = 'ev1'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!((sha.as_str(), path.as_str()), ("aa11", "/vault/evidence_originals/ev1/photo.jpg"));
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain"), chain);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM audit_ledger"), audit);
+    }
+
+    #[test]
+    fn s0_annotation_edits_are_audited_with_before_and_after_and_no_op_saves_are_silent() {
+        let conn = init_db(":memory:");
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap();
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap(); // identical: no-op
+        assert_eq!(s0_audit(&conn, "EVIDENCE_ANNOTATED"), 0);
+
+        let mut edited = s0_item("ev1", "aa11");
+        edited.title = "Exchange at library".into();
+        edited.tags.push("exchange".into());
+        save_evidence_on(&conn, edited).unwrap();
+        assert_eq!(s0_audit(&conn, "EVIDENCE_ANNOTATED"), 1);
+        let meta: String = conn
+            .query_row("SELECT metadata_json FROM evidence_chain WHERE action = 'EVIDENCE_ANNOTATED'", [], |r| r.get(0))
+            .unwrap();
+        assert!(meta.contains("Exchange photo") && meta.contains("Exchange at library"), "{meta}");
+        assert_eq!(verify_audit_ledger_conn(&conn).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn s0_withdrawal_keeps_record_metadata_and_history_and_hides_it_from_lists() {
+        let conn = init_db(":memory:");
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap();
+        save_evidence_on(&conn, s0_item("ev2", "cc33")).unwrap();
+        submit_evidence_on(&conn, EvidencePayload {
+            evidence_id: "ev1".into(),
+            document_id: "ev1".into(),
+            file_path: "/vault/evidence_originals/ev1/photo.jpg".into(),
+            file_hash: "aa11".into(),
+            exif_json: "{\"accuracy_m\":8}".into(),
+            gps_lat: Some(37.08),
+            gps_lon: Some(-94.51),
+            device_identity: "POPS android".into(),
+        })
+        .unwrap();
+
+        withdraw_evidence_on(&conn, "ev1".into()).unwrap();
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence WHERE id = 'ev1' AND withdrawn_at IS NOT NULL"), 1);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_metadata WHERE evidence_id = 'ev1'"), 1);
+        assert_eq!(s0_count(&conn, "SELECT COUNT(*) FROM evidence_chain WHERE evidence_id = 'ev1'"), 3);
+        assert_eq!(s0_audit(&conn, "EVIDENCE_WITHDRAWN"), 1);
+        let live: Vec<String> = list_live_evidence(&conn).unwrap().into_iter().map(|e| e.id).collect();
+        assert_eq!(live, vec!["ev2".to_string()]);
+
+        withdraw_evidence_on(&conn, "ev1".into()).unwrap(); // already withdrawn: no second entry
+        assert_eq!(s0_audit(&conn, "EVIDENCE_WITHDRAWN"), 1);
+        assert!(save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap_err().contains("withdrawn"));
+        assert!(withdraw_evidence_on(&conn, "missing".into()).is_err());
+        assert_eq!(verify_audit_ledger_conn(&conn).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn s0_capture_metadata_is_recorded_once() {
+        let conn = init_db(":memory:");
+        save_evidence_on(&conn, s0_item("ev1", "aa11")).unwrap();
+        let payload = |lat: f64| EvidencePayload {
+            evidence_id: "ev1".into(),
+            document_id: "ev1".into(),
+            file_path: "/vault/evidence_originals/ev1/photo.jpg".into(),
+            file_hash: "aa11".into(),
+            exif_json: "{}".into(),
+            gps_lat: Some(lat),
+            gps_lon: Some(-94.51),
+            device_identity: "POPS android".into(),
+        };
+        submit_evidence_on(&conn, payload(37.08)).unwrap();
+        let again = submit_evidence_on(&conn, payload(37.08)).unwrap();
+        assert!(again.contains("already_recorded"), "{again}");
+        let err = submit_evidence_on(&conn, payload(40.0)).unwrap_err();
+        assert!(err.contains("can't be replaced"), "{err}");
+        let lat: f64 = conn.query_row("SELECT gps_lat FROM evidence_metadata WHERE evidence_id = 'ev1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(lat, 37.08);
+        assert_eq!(s0_audit(&conn, "EVIDENCE_METADATA_SUBMITTED"), 1);
+    }
+
+    #[test]
+    fn s0_withdrawal_columns_migrate_existing_vaults_losslessly() {
+        let path = std::env::temp_dir().join(format!("pops-s0-migrate-{}.db", uuid::Uuid::new_v4()));
+        {
+            let old = rusqlite::Connection::open(&path).unwrap();
+            old.execute_batch(
+                "CREATE TABLE evidence (id TEXT PRIMARY KEY, case_id TEXT NOT NULL DEFAULT 'primary', type TEXT NOT NULL, title TEXT NOT NULL,
+                   description TEXT, date TEXT, file_path TEXT, sha256 TEXT NOT NULL, tags TEXT, created_at TEXT NOT NULL);
+                 INSERT INTO evidence (id, case_id, type, title, description, date, sha256, tags, created_at) VALUES ('old1', 'default', 'photo', 'Before S0', '', '2025-01-01', 'dd44', '', '2025-01-01T00:00:00Z');",
+            )
+            .unwrap();
+        }
+        let conn = init_db(path.to_str().unwrap());
+        let (case_id, title, sha, withdrawn): (String, String, String, Option<String>) = conn
+            .query_row("SELECT case_id, title, sha256, withdrawn_at FROM evidence WHERE id = 'old1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap();
+        assert_eq!((case_id.as_str(), title.as_str(), sha.as_str(), withdrawn), ("default", "Before S0", "dd44", None));
+        assert_eq!(list_live_evidence(&conn).unwrap().len(), 1);
+    }
+
+    /// Appends a ledger row exactly as the app's writers do, with an explicit timestamp.
+    fn append_ledger_row(conn: &rusqlite::Connection, n: usize, created_at: &str) -> String {
+        let record_id = format!("rec-{n}");
+        let payload_hash = sha256_hex(record_id.as_bytes());
+        let metadata = format!("{{\"n\":{n}}}");
+        let previous = get_previous_ledger_hash(conn).unwrap();
+        let entry = ledger_entry_hash(&record_id, "REPORT_SAVED", &payload_hash, created_at, &metadata, previous.as_deref());
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES (?1, ?2, 'REPORT_SAVED', ?3, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![format!("row-{n}"), record_id, payload_hash, created_at, metadata, previous, entry],
+        )
+        .unwrap();
+        entry
+    }
+
+    fn single_clock_ledger(rows: usize) -> rusqlite::Connection {
+        let conn = init_db(":memory:");
+        for n in 0..rows {
+            append_ledger_row(&conn, n, &format!("2026-10-{:02}T10:00:00+00:00", n + 1));
+        }
+        conn
+    }
+
+    /// The pre-fix verifier (wall-clock order), kept here only as a reference.
+    fn legacy_verify(conn: &rusqlite::Connection) -> (bool, usize) {
+        let rows: Vec<(String, String, String, String, String, Option<String>, Option<String>)> = conn
+            .prepare(
+                "SELECT record_id, action, COALESCE(payload_hash, hash), created_at, metadata_json, previous_ledger_hash, ledger_entry_hash
+                 FROM audit_ledger ORDER BY created_at ASC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        let mut previous: Option<String> = None;
+        for (checked, (rec, action, payload, created, meta, prev, hash)) in rows.iter().enumerate() {
+            let expected = ledger_entry_hash(rec, action, payload, created, meta, previous.as_deref());
+            if *prev != previous || hash.as_deref() != Some(expected.as_str()) {
+                return (false, checked);
+            }
+            previous = Some(expected);
+        }
+        (true, rows.len())
+    }
+
+    #[test]
+    fn ledger_link_walk_matches_legacy_verification_for_single_clock_history() {
+        let conn = single_clock_ledger(6);
+        let status = verify_audit_ledger_conn(&conn).unwrap();
+        assert_eq!(legacy_verify(&conn), (true, 6));
+        assert_eq!((status.status.as_str(), status.checked_rows), ("VERIFIED", 6));
+        assert_eq!(verify_audit_ledger_conn(&init_db(":memory:")).unwrap().status, "VERIFIED");
+    }
+
+    #[test]
+    fn ledger_link_walk_still_detects_tampering_deletion_forks_and_unhashed_rows() {
+        let status = |conn: &rusqlite::Connection| {
+            let s = verify_audit_ledger_conn(conn).unwrap();
+            (s.status, s.breach_row_id)
+        };
+
+        let tampered = single_clock_ledger(4);
+        tampered.execute("UPDATE audit_ledger SET metadata_json = '{\"n\":99}' WHERE id = 'row-2'", []).unwrap();
+        assert_eq!(status(&tampered), ("BREACH".into(), Some("row-2".into())));
+
+        let retimed = single_clock_ledger(4);
+        retimed.execute("UPDATE audit_ledger SET created_at = '2020-01-01T00:00:00+00:00' WHERE id = 'row-3'", []).unwrap();
+        assert_eq!(status(&retimed), ("BREACH".into(), Some("row-3".into())));
+
+        let deleted = single_clock_ledger(4);
+        deleted.execute("DELETE FROM audit_ledger WHERE id = 'row-1'", []).unwrap();
+        assert_eq!(status(&deleted).0, "BREACH");
+
+        let forked = single_clock_ledger(3);
+        let genesis: String = forked.query_row("SELECT ledger_entry_hash FROM audit_ledger WHERE id = 'row-0'", [], |r| r.get(0)).unwrap();
+        let entry = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-12-01T00:00:00+00:00", "{}", Some(&genesis));
+        forked
+            .execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                 VALUES ('row-x', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?1, ?2)",
+                rusqlite::params![genesis, entry],
+            )
+            .unwrap();
+        assert_eq!(status(&forked).0, "BREACH");
+
+        let unhashed = single_clock_ledger(2);
+        unhashed
+            .execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json)
+                 VALUES ('legacy', 'rec-l', 'REPORT_SAVED', 'p', 'p', '2026-11-01T00:00:00+00:00', '{}')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(status(&unhashed).0, "BREACH");
+        assert_eq!(legacy_verify(&unhashed).0, false);
+    }
+
+    fn ledger_rows(conn: &rusqlite::Connection) -> i64 {
+        conn.query_row("SELECT COUNT(*) FROM audit_ledger", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn append_refuses_forked_chain_and_writes_nothing() {
+        let conn = single_clock_ledger(3);
+        let genesis: String = conn.query_row("SELECT ledger_entry_hash FROM audit_ledger WHERE id = 'row-0'", [], |r| r.get(0)).unwrap();
+        let entry = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-12-01T00:00:00+00:00", "{}", Some(&genesis));
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES ('row-x', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?1, ?2)",
+            rusqlite::params![genesis, entry],
+        )
+        .unwrap();
+        let before = ledger_rows(&conn);
+
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("not linear"), "{err}");
+
+        // The real writer refuses before creating snapshots or a ledger row.
+        let vault = std::env::temp_dir().join(format!("pops-fork-{}", uuid::Uuid::new_v4()));
+        assert!(audit_browser_record(&conn, &vault, "report", "r1", "{}", "REPORT_SAVED").is_err());
+        assert_eq!(ledger_rows(&conn), before);
+        assert!(!vault.join("browser_records").exists());
+    }
+
+    #[test]
+    fn append_refuses_chain_with_missing_predecessor() {
+        let conn = single_clock_ledger(4);
+        conn.execute("DELETE FROM audit_ledger WHERE id = 'row-1'", []).unwrap();
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("1 missing predecessor(s)"), "{err}");
+    }
+
+    #[test]
+    fn append_refuses_chain_with_deleted_genesis() {
+        // One tip and one entry without a predecessor in the ledger: counting roots and
+        // tips alone would accept this.
+        let conn = single_clock_ledger(3);
+        conn.execute("DELETE FROM audit_ledger WHERE id = 'row-0'", []).unwrap();
+        let before = ledger_rows(&conn);
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("0 genesis entries") && err.contains("1 missing predecessor(s)"), "{err}");
+        let vault = std::env::temp_dir().join(format!("pops-genesis-{}", uuid::Uuid::new_v4()));
+        assert!(audit_browser_record(&conn, &vault, "report", "r1", "{}", "REPORT_SAVED").is_err());
+        assert_eq!(ledger_rows(&conn), before);
+    }
+
+    #[test]
+    fn append_refuses_detached_cycle() {
+        // A linear chain plus two rows edited to point at each other: still one genesis,
+        // one tip and no missing predecessor, but the cycle is unreachable.
+        let conn = single_clock_ledger(3);
+        for (id, entry, prev) in [("cyc-a", "hash-a", "hash-b"), ("cyc-b", "hash-b", "hash-a")] {
+            conn.execute(
+                "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                 VALUES (?1, ?1, 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?3, ?2)",
+                rusqlite::params![id, entry, prev],
+            )
+            .unwrap();
+        }
+        let err = get_previous_ledger_hash(&conn).unwrap_err();
+        assert!(err.contains("3 of 5 entries reachable"), "{err}");
+
+        // A ledger that is only a cycle is not treated as empty.
+        let only_cycle = init_db(":memory:");
+        for (id, entry, prev) in [("cyc-a", "hash-a", "hash-b"), ("cyc-b", "hash-b", "hash-a")] {
+            only_cycle
+                .execute(
+                    "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+                     VALUES (?1, ?1, 'REPORT_SAVED', 'p', 'p', '2026-12-01T00:00:00+00:00', '{}', ?3, ?2)",
+                    rusqlite::params![id, entry, prev],
+                )
+                .unwrap();
+        }
+        assert!(get_previous_ledger_hash(&only_cycle).is_err());
+    }
+
+    #[test]
+    fn append_continues_linear_chain_and_ignores_pre_link_legacy_rows() {
+        let empty = init_db(":memory:");
+        assert_eq!(get_previous_ledger_hash(&empty).unwrap(), None);
+
+        let conn = init_db(":memory:");
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json)
+             VALUES ('legacy', 'rec-l', 'REPORT_SAVED', 'p', 'p', '2026-01-01T00:00:00+00:00', '{}')",
+            [],
+        )
+        .unwrap();
+        let first = append_ledger_row(&conn, 0, "2026-10-01T10:00:00+00:00");
+        let second = append_ledger_row(&conn, 1, "2026-09-01T10:00:00+00:00"); // older clock, still links to the tip
+        let prev: Option<String> = conn.query_row("SELECT previous_ledger_hash FROM audit_ledger WHERE id = 'row-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(prev.as_deref(), Some(first.as_str()));
+        assert_eq!(get_previous_ledger_hash(&conn).unwrap().as_deref(), Some(second.as_str()));
+    }
 
     #[test]
     fn capture_locations_include_only_gps_rows() {
@@ -5116,6 +6175,10 @@ pub fn run() {
             submit_evidence,
             get_evidence_metadata,
             get_evidence_locations,
+            get_withdrawn_evidence,
+            get_device_identity,
+            record_capture_metadata,
+            get_capture_metadata,
             vault_transfer::export_vault_transfer,
             vault_transfer::inspect_vault_transfer,
             vault_transfer::restore_vault_transfer,

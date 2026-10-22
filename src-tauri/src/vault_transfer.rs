@@ -324,6 +324,12 @@ pub fn prepare_staged_database(
     if check != "ok" {
         return Err(format!("Database snapshot failed SQLite integrity_check: {check}"));
     }
+    // A package from an earlier Pops! version gets the current schema before anything
+    // reads it or it replaces this device's database.
+    crate::try_migrate_schema(staged_db).map_err(|e| format!("Transfer package rejected: {e}"))?;
+    // The restore entry is appended to the incoming ledger after the swap; refuse a
+    // forked or broken chain now, before anything on this device is replaced.
+    get_previous_ledger_hash(staged_db).map_err(|e| format!("Transfer package rejected: {e}"))?;
 
     let mut verified = 0;
     let mut mismatched = Vec::new();
@@ -621,6 +627,28 @@ mod tests {
     }
 
     #[test]
+    fn restoring_a_pre_s0_or_pre_c1_vault_brings_it_to_the_current_schema() {
+        let (root, conn) = desktop_vault();
+        // Make the source look like a vault from before S0: no withdrawal columns.
+        conn.execute_batch("ALTER TABLE evidence DROP COLUMN withdrawn_at; ALTER TABLE evidence DROP COLUMN withdrawn_reason; DROP TABLE evidence_capture_metadata;").unwrap();
+        let (_, bytes) = package(&conn, &root);
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let read = read_manifest(&mut archive).unwrap();
+        let staging = temp_dir("staging-pre-s0");
+        extract_verified(&mut archive, &read, &staging).unwrap();
+        let staged = rusqlite::Connection::open(staging.join(DB_ENTRY)).unwrap();
+        prepare_staged_database(&staged, &staging, &temp_dir("phone-pre-s0").join("Vault_System")).unwrap();
+
+        let live: i64 = staged
+            .query_row("SELECT COUNT(*) FROM evidence WHERE withdrawn_at IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(live, 2);
+        // And from before C1: the capture-metadata table exists again.
+        let c1: i64 = staged.query_row("SELECT COUNT(*) FROM evidence_capture_metadata", [], |r| r.get(0)).unwrap();
+        assert_eq!(c1, 0);
+    }
+
+    #[test]
     fn round_trip_verifies_originals_and_remaps_paths() {
         let (root, conn) = desktop_vault();
         let (manifest, bytes) = package(&conn, &root);
@@ -690,5 +718,200 @@ mod tests {
             Some(root.join("dossiers").join("contacts").join("x.json").to_string_lossy().to_string())
         );
         assert_eq!(remap_vault_path("/somewhere/else/file.txt", root), None);
+    }
+
+    // ─── Ledger continuity across devices (G1) ─────────────────────────────
+
+    /// Appends one audit-ledger row exactly as the app's writers do
+    /// (get_previous_ledger_hash + ledger_entry_hash), with an explicit device clock.
+    fn append_ledger_at(conn: &rusqlite::Connection, record_id: &str, action: &str, created_at: &str) -> String {
+        let payload_hash = sha256_hex(format!("{record_id}:{action}").as_bytes());
+        let metadata = serde_json::json!({ "record_id": record_id, "action": action }).to_string();
+        let previous = get_previous_ledger_hash(conn).unwrap();
+        let entry = ledger_entry_hash(record_id, action, &payload_hash, created_at, &metadata, previous.as_deref());
+        conn.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![uuid::Uuid::new_v4().to_string(), record_id, action, payload_hash, created_at, metadata, previous, entry],
+        )
+        .unwrap();
+        entry
+    }
+
+    fn ledger_status(conn: &rusqlite::Connection) -> (String, usize) {
+        let status = crate::verify_audit_ledger_conn(conn).unwrap();
+        (status.status, status.checked_rows)
+    }
+
+    fn vault_at(name: &str) -> (PathBuf, rusqlite::Connection) {
+        let root = temp_dir(name).join("Vault_System");
+        crate::ensure_vault_system_layout(&root).unwrap();
+        let conn = crate::init_db(root.join("database").join("proof_of_presence.db").to_str().unwrap());
+        (root, conn)
+    }
+
+    /// Evidence stored the way import_evidence_file + save_evidence store it.
+    fn add_evidence(conn: &rusqlite::Connection, root: &Path, stored_root: &str, sep: char, id: &str, bytes: &[u8]) -> String {
+        let dir = root.join("evidence_originals").join(id);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("photo.jpg"), bytes).unwrap();
+        let hash = sha256_hex(bytes);
+        let stored = format!("{stored_root}{sep}evidence_originals{sep}{id}{sep}photo.jpg");
+        conn.execute(
+            "INSERT INTO evidence (id, type, title, file_path, sha256, created_at) VALUES (?1, 'photo', ?1, ?2, ?3, '2026-10-14T10:00:00+00:00')",
+            rusqlite::params![id, stored, hash],
+        )
+        .unwrap();
+        insert_evidence_chain(conn, id, "EVIDENCE_SAVED", &hash, serde_json::json!({ "evidence_id": id }).to_string()).unwrap();
+        hash
+    }
+
+    /// Full restore as restore_from_archive performs it (package -> verified extract ->
+    /// staged rewrite -> pre-restore snapshot -> file copy -> SQLite backup swap -> record_restore).
+    fn transfer(src: &rusqlite::Connection, src_root: &Path, platform: &str, dst_root: &Path, dst: &mut rusqlite::Connection) {
+        let (manifest, bytes) = {
+            let (m, cursor) = write_package(src, src_root, Cursor::new(Vec::new()), platform, "1.0.0").unwrap();
+            (m, cursor.into_inner())
+        };
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+        let staging = temp_dir("g1-staging");
+        extract_verified(&mut archive, &manifest, &staging).unwrap();
+        let staged = rusqlite::Connection::open(staging.join(DB_ENTRY)).unwrap();
+        let (verified, mismatched, missing) = prepare_staged_database(&staged, &staging, dst_root).unwrap();
+        let pre_restore = vault_database_dir(dst_root).join("pre-restore-test.db");
+        snapshot_database(dst, &pre_restore).unwrap();
+        for dir in INCLUDED_DIRS {
+            if staging.join(dir).exists() {
+                copy_tree(&staging.join(dir), &dst_root.join(dir)).unwrap();
+            }
+        }
+        rusqlite::backup::Backup::new(&staged, dst)
+            .unwrap()
+            .run_to_completion(256, std::time::Duration::from_millis(0), None)
+            .unwrap();
+        drop(staged);
+        record_restore(dst, &manifest, verified, &mismatched, &missing, &pre_restore).unwrap();
+    }
+
+    fn custody_rows(conn: &rusqlite::Connection, id: &str) -> Vec<(String, String, String, String)> {
+        conn.prepare("SELECT id, action, hash, metadata_json FROM evidence_chain WHERE evidence_id = ?1 AND action != 'VAULT_TRANSFER_RESTORED' ORDER BY id")
+            .unwrap()
+            .query_map([id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn desktop_to_android_round_trip_keeps_identity_custody_and_ledger() {
+        let (desk_root, desk) = vault_at("g1-desk");
+        let hash = add_evidence(&desk, &desk_root, "C:\\Users\\pops\\Vault_System", '\\', "lx1abc_aaaa", b"desktop-photo");
+        append_ledger_at(&desk, "rec-1", "OPERATIONAL_RECORD_SAVED", "2026-10-14T10:00:00+00:00");
+        append_ledger_at(&desk, "rec-2", "REPORT_SAVED", "2026-10-14T11:00:00+00:00");
+        assert_eq!(ledger_status(&desk), ("VERIFIED".into(), 2));
+        let custody = custody_rows(&desk, "lx1abc_aaaa");
+
+        let (phone_root, mut phone) = vault_at("g1-phone");
+        transfer(&desk, &desk_root, "windows", &phone_root, &mut phone);
+
+        let (sha, path): (String, String) = phone
+            .query_row("SELECT sha256, file_path FROM evidence WHERE id = 'lx1abc_aaaa'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        assert_eq!(sha, hash);
+        assert!(Path::new(&path).starts_with(&phone_root), "{path}");
+        assert_eq!(sha256_hex(&fs::read(&path).unwrap()), hash);
+        assert_eq!(custody_rows(&phone, "lx1abc_aaaa"), custody);
+        assert_eq!(ledger_status(&phone), ("VERIFIED".into(), 3));
+    }
+
+    #[test]
+    fn android_to_desktop_round_trip_keeps_capture_metadata_and_ledger() {
+        let android_root = "/data/user/0/com.proofofpresence.app/Vault_System";
+        let (phone_root, phone) = vault_at("g1-phone2");
+        let hash = add_evidence(&phone, &phone_root, android_root, '/', "m9cam_cccc", b"camera-bytes");
+        phone
+            .execute(
+                "INSERT INTO evidence_metadata (evidence_id, document_id, file_hash, file_path, exif_json, gps_lat, gps_lon, device_identity, timestamp_utc)
+                 VALUES ('m9cam_cccc', 'm9cam_cccc', ?1, ?2, '{\"accuracy_m\":8}', 37.0842, -94.5133, 'POPS android', '2026-10-21T17:00:00+00:00')",
+                rusqlite::params![hash, format!("{android_root}/evidence_originals/m9cam_cccc/photo.jpg")],
+            )
+            .unwrap();
+        append_ledger_at(&phone, "rem-1", "REMINDER_SAVED", "2026-10-21T17:00:05+00:00");
+        let custody = custody_rows(&phone, "m9cam_cccc");
+
+        let (desk_root, mut desk) = vault_at("g1-desk2");
+        transfer(&phone, &phone_root, "android", &desk_root, &mut desk);
+
+        let (lat, lon, device, meta_path): (f64, f64, String, String) = desk
+            .query_row("SELECT gps_lat, gps_lon, device_identity, file_path FROM evidence_metadata WHERE evidence_id = 'm9cam_cccc'", [], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })
+            .unwrap();
+        assert_eq!((lat, lon, device.as_str()), (37.0842, -94.5133, "POPS android"));
+        assert!(Path::new(&meta_path).starts_with(&desk_root), "{meta_path}");
+        let sha: String = desk.query_row("SELECT sha256 FROM evidence WHERE id = 'm9cam_cccc'", [], |r| r.get(0)).unwrap();
+        assert_eq!(sha, hash);
+        assert_eq!(custody_rows(&desk, "m9cam_cccc"), custody);
+        assert_eq!(ledger_status(&desk), ("VERIFIED".into(), 2));
+    }
+
+    #[test]
+    fn restore_rejects_forked_incoming_ledger_before_touching_the_device() {
+        let (desk_root, desk) = vault_at("g1-fork-desk");
+        add_evidence(&desk, &desk_root, "C:\\POPS\\Vault_System", '\\', "fk1_hhhh", b"z");
+        let genesis = append_ledger_at(&desk, "rec-1", "REPORT_SAVED", "2026-10-14T10:00:00+00:00");
+        append_ledger_at(&desk, "rec-2", "REPORT_SAVED", "2026-10-14T11:00:00+00:00");
+        let fork = ledger_entry_hash("rec-x", "REPORT_SAVED", "p", "2026-10-14T12:00:00+00:00", "{}", Some(&genesis));
+        desk.execute(
+            "INSERT INTO audit_ledger (id, record_id, action, payload_hash, hash, created_at, metadata_json, previous_ledger_hash, ledger_entry_hash)
+             VALUES ('fork', 'rec-x', 'REPORT_SAVED', 'p', 'p', '2026-10-14T12:00:00+00:00', '{}', ?1, ?2)",
+            rusqlite::params![genesis, fork],
+        )
+        .unwrap();
+
+        let (manifest, cursor) = write_package(&desk, &desk_root, Cursor::new(Vec::new()), "windows", "1.0.0").unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(cursor.into_inner())).unwrap();
+        let staging = temp_dir("g1-fork-staging");
+        extract_verified(&mut archive, &manifest, &staging).unwrap();
+        let staged = rusqlite::Connection::open(staging.join(DB_ENTRY)).unwrap();
+
+        let (phone_root, phone) = vault_at("g1-fork-phone");
+        let err = prepare_staged_database(&staged, &staging, &phone_root).unwrap_err();
+        assert!(err.contains("Transfer package rejected") && err.contains("not linear"), "{err}");
+        let phone_evidence: i64 = phone.query_row("SELECT COUNT(*) FROM evidence", [], |r| r.get(0)).unwrap();
+        assert_eq!(phone_evidence, 0);
+    }
+
+    /// Regression for G1: the sending desktop's clock is two minutes ahead of the phone.
+    /// The restore entry and the phone's next entry carry earlier wall-clock times than the
+    /// desktop's last entry; the ledger must still verify and stay a single linear chain.
+    #[test]
+    fn two_minute_clock_skew_between_devices_still_verifies() {
+        let (desk_root, desk) = vault_at("g1-skew-desk");
+        add_evidence(&desk, &desk_root, "C:\\POPS\\Vault_System", '\\', "sk1_dddd", b"x");
+        append_ledger_at(&desk, "rec-1", "REPORT_SAVED", "2026-10-14T10:00:00+00:00");
+        let desktop_ahead = (chrono::Utc::now() + chrono::Duration::seconds(120)).to_rfc3339();
+        let desktop_tip = append_ledger_at(&desk, "rec-2", "REPORT_SAVED", &desktop_ahead);
+        assert_eq!(ledger_status(&desk), ("VERIFIED".into(), 2));
+
+        let (phone_root, mut phone) = vault_at("g1-skew-phone");
+        transfer(&desk, &desk_root, "windows", &phone_root, &mut phone);
+        let restore_prev: Option<String> = phone
+            .query_row("SELECT previous_ledger_hash FROM audit_ledger WHERE action = 'VAULT_TRANSFER_RESTORED'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(restore_prev.as_deref(), Some(desktop_tip.as_str()));
+        assert_eq!(ledger_status(&phone), ("VERIFIED".into(), 3));
+
+        // The phone keeps working on its own (slower) clock after the restore.
+        append_ledger_at(&phone, "rem-1", "REMINDER_SAVED", &chrono::Utc::now().to_rfc3339());
+        assert_eq!(ledger_status(&phone), ("VERIFIED".into(), 4));
+        let forks: i64 = phone
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT previous_ledger_hash FROM audit_ledger WHERE previous_ledger_hash IS NOT NULL GROUP BY previous_ledger_hash HAVING COUNT(*) > 1)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(forks, 0, "ledger forked");
     }
 }

@@ -101,10 +101,12 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
     const now = new Date();
     const stamp = now.toISOString();
     let photoLine = '';
+    let metadataError: string | undefined;
     try {
       if (photo) {
         const sealed = await sealCameraPhoto(photo, !fromGallery, fromGallery);
         photoLine = `\n\nPhoto: ${sealed.evidence.id} (SHA-256 ${sealed.evidence.sha256}, integrity ${sealed.integrity})`;
+        metadataError = sealed.captureMetadataError;
       }
     } catch (e) {
       setStatus(`Photo could not be sealed: ${e}`);
@@ -128,8 +130,11 @@ export function QuickIncidentLog({ onSaved }: { onSaved?: () => void }) {
       await invoke('save_evidence', { item });
       setNote('');
       clearPhoto();
-      setStatus(`Logged${photoLine ? ' with photo' : ''} and sealed in the Evidence Vault at ${now.toLocaleTimeString()}`);
-      show('Logged and sealed in the Evidence Vault');
+      const metadataNote = metadataError
+        ? `. Capture metadata (EXIF and how the photo arrived) was not recorded: ${metadataError}. The sealed original is unaffected.`
+        : '';
+      setStatus(`Logged${photoLine ? ' with photo' : ''} and sealed in the Evidence Vault at ${now.toLocaleTimeString()}${metadataNote}`);
+      show(metadataError ? 'Logged and sealed. Capture metadata was not recorded.' : 'Logged and sealed in the Evidence Vault');
       onSaved?.();
     } catch (e) {
       setStatus(`Could not save: ${e}`);
