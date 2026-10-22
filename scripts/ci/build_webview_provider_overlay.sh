@@ -31,10 +31,15 @@ cat > "$WORK/res/xml/config_webview_packages.xml" <<'XML'
 </webviewproviders>
 XML
 
-ANDROID_JAR="$ANDROID_HOME/platforms/android-26/android.jar"
-if [ ! -f "$ANDROID_JAR" ]; then
-  yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-26" > /dev/null
+# Any installed platform works: the overlay only references config_webview_packages,
+# which exists in every Android version, and is resolved by name on the device.
+ANDROID_JAR=$(find "$ANDROID_HOME/platforms" -name android.jar 2>/dev/null | sort -V | tail -1)
+if [ -z "$ANDROID_JAR" ]; then
+  (yes 2>/dev/null || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-26" > /dev/null || true
+  ANDROID_JAR="$ANDROID_HOME/platforms/android-26/android.jar"
 fi
+[ -f "$ANDROID_JAR" ] || { echo "no android.jar available"; exit 1; }
+echo "linking against $ANDROID_JAR"
 BT=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
 
 "$BT/aapt2" compile --dir "$WORK/res" -o "$WORK/res.zip"
