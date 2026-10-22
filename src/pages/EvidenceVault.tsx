@@ -276,7 +276,13 @@ export default function EvidenceVault({ pendingDraft }: EvidenceVaultProps) {
       };
 
       await add(evidence);
-      show('Evidence imported and preserved');
+      // C1: EXIF facts and the acquisition path, read by Rust from the stored original.
+      try {
+        await invoke('record_capture_metadata', { evidenceId, requestedSource: 'file' });
+        show('Evidence imported and preserved');
+      } catch (err) {
+        show(`Evidence imported and preserved. Capture metadata was not recorded: ${err instanceof Error ? err.message : String(err)}`);
+      }
       setIsModalOpen(false);
       setForm({ type: 'photo', title: '', description: '', date: '', tags: '', trustGlyphRisk: 'low', sourceDescription: '' });
       setFile(null);

@@ -35,6 +35,8 @@ rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 # Per-device signing identity (Sync Engine S0, decision D3)
 ed25519-dalek = { version = "2", features = ["rand_core"] }
+# Read-only EXIF parsing for capture metadata (C1). Parses from a byte slice; never writes.
+kamadak-exif = "0.6"
 sha2 = "0.10"
 hex = "0.4"
 # rustls avoids cross-compiling OpenSSL for Android/iOS

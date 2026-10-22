@@ -22,6 +22,8 @@ export type SealedCapture = {
   location: CaptureLocation | null;
   /** True when the user asked for location but it could not be read. */
   locationMissing: boolean;
+  /** Set when capture metadata (EXIF facts, acquisition path) could not be recorded. The photo itself is sealed either way. */
+  captureMetadataError?: string;
 };
 
 /** Fired after a capture is sealed so mounted vault views can reload from SQLite. */
@@ -106,8 +108,16 @@ export async function sealCameraPhoto(file: File, attachLocation: boolean, fromG
     expectedHash: imported.sha256,
   });
 
+  // C1: EXIF facts and the acquisition path, read by Rust from the stored original.
+  let captureMetadataError: string | undefined;
+  try {
+    await invoke('record_capture_metadata', { evidenceId, requestedSource: fromGallery ? 'photo_library' : 'camera' });
+  } catch (err) {
+    captureMetadataError = String(err);
+  }
+
   window.dispatchEvent(new CustomEvent(EVIDENCE_SEALED_EVENT, { detail: { id: evidenceId } }));
-  return { evidence, integrity: integrity.status, location, locationMissing: attachLocation && !location };
+  return { evidence, integrity: integrity.status, location, locationMissing: attachLocation && !location, captureMetadataError };
 }
 
 export { formatLocation };
