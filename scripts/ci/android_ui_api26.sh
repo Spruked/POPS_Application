@@ -54,8 +54,16 @@ if [ -n "$OVERLAY_APK" ]; then
   adb shell "mkdir -p $OVERLAY_DIR" 2>/dev/null || OVERLAY_DIR=/system/vendor/overlay
   adb shell "mkdir -p $OVERLAY_DIR" || fail "cannot create $OVERLAY_DIR"
   adb push "$OVERLAY_APK" "$OVERLAY_DIR/PopsCiWebViewProvider.apk" > /dev/null
+  adb shell chmod 755 "$OVERLAY_DIR"
   adb shell chmod 644 "$OVERLAY_DIR/PopsCiWebViewProvider.apk"
-  log "provider_overlay: $OVERLAY_DIR/PopsCiWebViewProvider.apk"
+  # A directory created over adb gets the generic vendor_file label, which the overlay
+  # loader (idmap, system_server) is denied. Apply the policy's own labels.
+  adb shell restorecon -R "$OVERLAY_DIR" > /dev/null 2>&1 || true
+  if ! adb shell ls -Zd "$OVERLAY_DIR" | grep -q vendor_overlay_file; then
+    adb shell chcon u:object_r:vendor_overlay_file:s0 "$OVERLAY_DIR" "$OVERLAY_DIR/PopsCiWebViewProvider.apk"
+  fi
+  adb shell ls -Zd "$OVERLAY_DIR" "$OVERLAY_DIR/PopsCiWebViewProvider.apk" | tr -d '\r' > "$OUT/overlay-labels.txt"
+  log "provider_overlay: $OVERLAY_DIR/PopsCiWebViewProvider.apk ($(tr '\n' ' ' < "$OUT/overlay-labels.txt"))"
 fi
 adb reboot
 adb wait-for-device; wait_for_boot
