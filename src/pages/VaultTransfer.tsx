@@ -169,8 +169,9 @@ export default function VaultTransfer() {
               <label className="vault-transfer-confirm" data-testid="vault-transfer-replace-warning">
                 <input type="checkbox" checked={confirmReplace} onChange={(e) => setConfirmReplace(e.target.checked)} data-testid="vault-transfer-confirm-checkbox" />
                 <span>
-                  This device already has {inspection.currentEvidenceCount} evidence items. Restoring replaces these records with the package.
-                  A snapshot of the current database is saved first.
+                  This device already has {inspection.currentEvidenceCount} evidence items. POPS restores only if every record and original on
+                  this device is already in the package unchanged. Otherwise the restore is refused and nothing on this device changes.
+                  When it proceeds, a snapshot of the current database is saved first and its fingerprint is recorded in the audit ledger.
                 </span>
               </label>
             )}
