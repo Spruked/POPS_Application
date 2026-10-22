@@ -83,11 +83,14 @@ Restore order:
 3. Run SQLite `integrity_check`.
 4. Re-hash each evidence original against its recorded sha256. Mismatches are flagged, not hidden.
 5. Rewrite the Windows/macOS/Linux vault paths for this device.
-6. Save a `pre-restore-<time>.db` snapshot.
-7. Copy the files and swap in the database with the SQLite backup API.
-8. Add one `VAULT_TRANSFER_RESTORED` chain-of-custody row per evidence item, plus one hash-linked audit-ledger entry.
+6. **Non-destructive check.** Refuse the restore, with nothing changed, if this device holds any user record the package doesn't contain identically, or if the package would overwrite an existing original with different bytes. Every table counts as user records except device bookkeeping (`audit_ledger`, `reminder_settings`, `sync_peers`, `sync_state`, `gcal_links`). The untouched default case that every install seeds is ignored. A freshly installed device always passes.
+7. Save a `pre-restore-<time>.db` snapshot.
+8. Copy the files and swap in the database with the SQLite backup API.
+9. Add one `VAULT_TRANSFER_RESTORED` chain-of-custody row per evidence item, plus one hash-linked audit-ledger entry that records the pre-restore snapshot's SHA-256, so the replaced device bookkeeping stays verifiably preserved.
 
-Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cover the round trip, a tampered entry, an altered manifest, path traversal, and cross-OS path remapping.
+Vault Transfer is for backup and new-device setup. Combining two vaults that both hold records is the job of the Sync Engine, not restore.
+
+Android `content://` picks are opened through `tauri-plugin-fs`. Rust tests cover the round trip, a tampered entry, an altered manifest, path traversal, cross-OS path remapping, restore into a freshly launched device, and every non-destructive refusal (device-only evidence, edited shared records, an edited default case, an original that would be overwritten, and records an older package cannot represent).
 
 ## iOS signing (CI)
 
