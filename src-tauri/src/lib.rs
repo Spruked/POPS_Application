@@ -162,6 +162,20 @@ fn migrate_legacy_app_data(app_data: Option<PathBuf>, vault_root: &Path) -> Resu
 
 fn init_db(path: &str) -> rusqlite::Connection {
     let conn = rusqlite::Connection::open(path).expect("open db");
+    migrate_schema(&conn);
+    conn
+}
+
+/// Brings a database from any earlier Pops! version up to the current schema. Used
+/// for this device's database at startup and for a Vault Transfer package's database
+/// before it replaces the live one, so an older vault restores into a working schema.
+/// Additive and idempotent: it only creates missing tables, columns and indexes.
+pub(crate) fn try_migrate_schema(conn: &rusqlite::Connection) -> Result<(), String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| migrate_schema(conn)))
+        .map_err(|_| "The database could not be brought up to the current Pops! schema.".to_string())
+}
+
+fn migrate_schema(conn: &rusqlite::Connection) {
     conn.execute_batch(
         "BEGIN;
         CREATE TABLE IF NOT EXISTS evidence (
@@ -610,7 +624,6 @@ fn init_db(path: &str) -> rusqlite::Connection {
     reminders::init_reminder_tables(&conn).expect("init reminder tables");
     sync::init_sync_tables(&conn).expect("init sync tables");
     google_calendar::init_gcal_tables(&conn).expect("init google calendar tables");
-    conn
 }
 
 // ─── Data Structures ─────────────────────────────────────────────
