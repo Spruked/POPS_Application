@@ -59,6 +59,8 @@ APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V |
   echo "package: $PACKAGE"
   echo "versionName: $VERSION"
   echo "minSdk: $MIN_SDK"
+  echo "native_libraries (zip method, size):"
+  unzip -v "$APK" 'lib/*' 2>/dev/null | awk '/\.so$/ {print "  " $8 "  " $2 "  " $1}' || true
   echo "signer:"
   "$APKSIGNER" verify --print-certs "$APK" 2>/dev/null | grep -E "certificate (DN|SHA-256)" | sed 's/^/  /' || echo "  (apksigner unavailable)"
 } | tee "$OUT_DIR/webview-provenance.txt"

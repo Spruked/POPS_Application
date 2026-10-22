@@ -45,8 +45,25 @@ else
   log "webview_install: system replace ($(grep -o 'INSTALL_FAILED_[A-Z_]*' "$OUT/webview-install.txt" | head -1))"
   SYS_APK=$(adb shell pm path com.android.webview | tr -d '\r' | sed 's/^package://' | head -1)
   [ -n "$SYS_APK" ] || fail "stock com.android.webview not found"
-  adb shell rm -rf "$(dirname "$SYS_APK")/oat"
+  WV_DIR=$(dirname "$SYS_APK")
+  adb shell rm -rf "$WV_DIR/oat" "$WV_DIR/lib"
   adb push "$WEBVIEW_APK" "$SYS_APK" > /dev/null
+  # The AOSP prebuilt expects the OS build to extract its native libraries, so the
+  # loader can't use them from inside the APK. Extract them from the same verified
+  # APK into the directory the loader searches first.
+  LIB_TMP=$(mktemp -d)
+  unzip -q -o "$WEBVIEW_APK" 'lib/x86_64/*' 'lib/x86/*' -d "$LIB_TMP" 2>/dev/null || true
+  for ABI in x86_64 x86; do
+    if ls "$LIB_TMP/lib/$ABI/"*.so > /dev/null 2>&1; then
+      adb shell mkdir -p "$WV_DIR/lib/$ABI"
+      for SO in "$LIB_TMP/lib/$ABI/"*.so; do adb push "$SO" "$WV_DIR/lib/$ABI/" > /dev/null; done
+      log "webview_libs_$ABI: $(cd "$LIB_TMP/lib/$ABI" && ls *.so | tr '\n' ' ')"
+    fi
+  done
+  adb shell chmod -R 755 "$WV_DIR/lib" 2>/dev/null || true
+  adb shell "find $WV_DIR/lib -name '*.so' -exec chmod 644 {} +" 2>/dev/null || true
+  adb shell restorecon -R "$WV_DIR" > /dev/null 2>&1 || true
+  adb shell ls -lZR "$WV_DIR" | tr -d '\r' > "$OUT/webview-system-files.txt"
 fi
 if [ -n "$OVERLAY_APK" ]; then
   # Static overlay adding com.android.webview to the image's WebView provider list.
