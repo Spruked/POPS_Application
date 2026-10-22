@@ -56,7 +56,7 @@ export async function sealCameraPhoto(file: File, attachLocation: boolean, fromG
   const location = await locationPromise;
 
   const source = fromGallery
-    ? `Picked from the device photo library in POPS (${caps.platform}); file last modified ${new Date(file.lastModified || capturedAt.getTime()).toISOString()}. Original preserved unaltered and sealed with SHA-256 at import.`
+    ? `Picked from the device photo library in POPS (${caps.platform}); file last modified ${new Date(file.lastModified || capturedAt.getTime()).toISOString()}. File preserved exactly as received and sealed with SHA-256 at import.`
     : `Captured with the device camera in POPS (${caps.platform}). Original preserved unaltered and sealed with SHA-256 at import.`;
   const baseTag = fromGallery ? 'gallery-import' : 'camera-capture';
   const evidence: Evidence = {
