@@ -81,11 +81,16 @@ jobs:
       # Fail the build if the generated APK declares anything else.
       - name: Verify APK minimum SDK is 26
         run: |
+          set -o pipefail
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -name "app-universal-debug.apk" | head -1)
-          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort | tail -1)
-          SDK=$("$AAPT2" dump badging "$APK" | sed -n "s/^sdkVersion:'\([0-9]*\)'.*/\1/p")
+          AAPT2=$(find "$ANDROID_HOME/build-tools" -name aapt2 -type f | sort -V | tail -1)
+          test -x "$AAPT2" || { echo "aapt2 not found under $ANDROID_HOME/build-tools"; exit 1; }
+          BADGING=$("$AAPT2" dump badging "$APK")
+          echo "$BADGING" | grep -E "^(package|sdkVersion|minSdkVersion|targetSdkVersion):" || true
+          # aapt2 prints minSdkVersion:'N' (older aapt printed sdkVersion:'N').
+          SDK=$(echo "$BADGING" | sed -nE "s/^(min)?[sS]dkVersion:'([0-9]+)'.*/\2/p" | head -1)
           echo "APK=$APK minSdk=$SDK"
-          test "$SDK" = "26"
+          test "$SDK" = "26" || { echo "Expected minSdk 26, got '$SDK'"; exit 1; }
       # Release signing. Repository secrets (Settings -> Secrets and variables -> Actions):
       #   ANDROID_KEY_BASE64   base64 of the upload keystore (.jks)
       #   ANDROID_KEY_ALIAS    key alias inside the keystore
