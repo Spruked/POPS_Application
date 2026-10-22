@@ -160,7 +160,7 @@ jobs:
           disable-animations: true
           script: |
             APK=$(find artifact -name "app-universal-debug.apk" | head -1); echo "APK=$APK"; adb install -r -g "$APK"
-            adb logcat -c
+            adb logcat -c || echo "logcat clear not supported on this image (fresh emulator); continuing"
             adb emu geo fix -104.990251 39.7392358
             adb shell monkey -p com.proofofpresence.app -c android.intent.category.LAUNCHER 1
             sleep 45
