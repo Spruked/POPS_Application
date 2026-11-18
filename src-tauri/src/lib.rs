@@ -6157,7 +6157,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_shell::init());
     #[cfg(mobile)]
-    let builder = builder.plugin(tauri_plugin_geolocation::init());
+    let builder = builder.plugin(tauri_plugin_geolocation::init()).plugin(tauri_plugin_barcode_scanner::init());
     builder
         .setup(|app| {
             let app_data = app.path().app_data_dir().ok();

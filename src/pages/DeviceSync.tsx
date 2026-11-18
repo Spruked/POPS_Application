@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { AlertTriangle, CalendarDays, Link2, RefreshCw, Smartphone, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Link2, QrCode, RefreshCw, Smartphone, Trash2 } from 'lucide-react';
+import QRCodeLib from 'qrcode';
 import { usePlatformCapabilities } from '../utils/platform';
 import { applySaveResult, formatVenueTime, type ReminderAppointment } from '../utils/reminderRuntime';
 
@@ -38,6 +39,8 @@ export default function DeviceSync() {
   const [lanUrls, setLanUrls] = useState<string[]>([]);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [qr, setQr] = useState('');
+  const [cameraBlocked, setCameraBlocked] = useState(false);
   const mobile = !!caps?.mobile;
   const [gcal, setGcal] = useState<GcalStatus | null>(null);
   const [clientId, setClientId] = useState('');
@@ -72,8 +75,30 @@ export default function DeviceSync() {
     setCode(c);
     return 'Pairing code created. Enter it on the phone in Settings → Device Sync. Treat it like a password.';
   });
-  const join = () => run(async () => {
-    const peer = await invoke<SyncPeer>('sync_join_pairing', { code });
+  useEffect(() => {
+    if (mobile || !code) { setQr(''); return; }
+    QRCodeLib.toDataURL(code, { errorCorrectionLevel: 'M', margin: 2, width: 320 }).then(setQr).catch(() => setQr(''));
+  }, [code, mobile]);
+
+  const scanQr = async () => {
+    const scanner = await import('@tauri-apps/plugin-barcode-scanner');
+    let state = await scanner.checkPermissions();
+    if (state !== 'granted') state = await scanner.requestPermissions();
+    if (state !== 'granted') { setCameraBlocked(true); return; }
+    setCameraBlocked(false);
+    try {
+      const result = await scanner.scan({ windowed: false, formats: [scanner.Format.QRCode] });
+      const text = result.content.trim();
+      if (!text.startsWith('POPS1.')) { setMsg({ ok: false, text: 'That QR code is not a POPS pairing code.' }); return; }
+      setCode(text);
+      join(text);
+    } catch (e) {
+      if (!/cancel/i.test(String(e))) setMsg({ ok: false, text: `Could not scan: ${String(e)}` });
+    }
+  };
+
+  const join = (scanned?: string) => run(async () => {
+    const peer = await invoke<SyncPeer>('sync_join_pairing', { code: scanned ?? code });
     setCode('');
     const out = await runPhoneSync().catch((e) => { throw new Error(`Paired with ${peer.name}, but the first sync failed: ${String(e)}`); });
     return `Paired with ${peer.name}. First sync: ${out.received} received, ${out.applied} updated on this phone, ${out.sent} sent.`;
@@ -129,8 +154,15 @@ export default function DeviceSync() {
         <div className="card" style={{ marginBottom: 16 }}>
           <h3 style={{ marginTop: 0, display: 'flex', gap: 8, alignItems: 'center' }}><Link2 size={18} /> Pair with your desktop</h3>
           <div className="form-group"><label>Pairing code from POPS Desktop</label><textarea value={code} onChange={(e) => setCode(e.target.value)} placeholder="POPS1.…" rows={3} data-testid="sync-code-input" /></div>
+          {cameraBlocked && (
+            <div className="card" style={{ marginBottom: 12, padding: 12 }} data-testid="sync-camera-blocked">
+              <p style={{ margin: '0 0 8px', fontSize: 14 }}>POPS needs the camera only to read the pairing QR code on your computer screen. You can allow it in Settings, or paste the code instead.</p>
+              <button className="btn btn-ghost btn-sm" onClick={() => void import('@tauri-apps/plugin-barcode-scanner').then((m) => m.openAppSettings())}>Open Settings</button>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" disabled={busy || !code.trim()} onClick={() => void join()} data-testid="sync-join-button">Pair</button>
+            <button className="btn btn-primary" disabled={busy} onClick={() => void scanQr()} data-testid="sync-scan-qr"><QrCode size={16} /> Scan QR code</button>
+            <button className="btn btn-ghost" disabled={busy || !code.trim()} onClick={() => void join()} data-testid="sync-join-button">Pair with pasted code</button>
             <button className="btn btn-ghost" disabled={busy || !peers.some((p) => p.role === 'desktop' && !p.revoked)} onClick={() => void syncNow()} data-testid="sync-now-button"><RefreshCw size={16} /> Sync now</button>
           </div>
           <p style={{ fontSize: 13, opacity: 0.8 }}>POPS syncs automatically when you open the app and every 5 minutes while it's open. It tries your secure gateway first, then the same Wi-Fi.{caps?.platform === 'ios' && ' On iPhone, tap Allow when iOS asks to find devices on your local network. If you tapped Don\'t Allow, turn on Settings → Apps → POPS → Local Network.'}</p>
@@ -144,6 +176,7 @@ export default function DeviceSync() {
             <button className="btn btn-primary" disabled={busy} onClick={() => void createPairing()} data-testid="sync-create-pairing">Create pairing code</button>
             <button className="btn btn-ghost" disabled={busy} onClick={() => void startServer()}>Start desktop sync</button>
           </div>
+          {qr && <div style={{ marginTop: 12, textAlign: 'center' }}><img src={qr} alt="Pairing QR code" data-testid="sync-pairing-qr" style={{ width: 260, height: 260, background: '#fff', padding: 8, borderRadius: 12 }} /><p style={{ fontSize: 13, opacity: 0.8 }}>On the phone: Device Sync → Scan QR code. Or copy the code below.</p></div>}
           {code && <textarea readOnly value={code} rows={4} style={{ width: '100%', marginTop: 12, fontFamily: 'monospace', fontSize: 12 }} data-testid="sync-pairing-code" onFocus={(e) => e.currentTarget.select()} />}
           {lanUrls.length > 0 && <p style={{ fontSize: 13, opacity: 0.8 }}>Same-Wi-Fi address: {lanUrls.join(', ')}. Allow POPS through Windows Firewall when asked.</p>}
         </div>

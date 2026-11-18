@@ -1,12 +1,17 @@
 {
   "identifier": "mobile",
-  "description": "Mobile-only permissions (Android/iOS): GPS for camera evidence",
+  "description": "Mobile-only permissions (Android/iOS): GPS for camera evidence, QR scan for desktop pairing",
   "local": true,
   "windows": ["main"],
   "platforms": ["android", "iOS"],
   "permissions": [
     "geolocation:allow-check-permissions",
     "geolocation:allow-request-permissions",
-    "geolocation:allow-get-current-position"
+    "geolocation:allow-get-current-position",
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel",
+    "barcode-scanner:allow-check-permissions",
+    "barcode-scanner:allow-request-permissions",
+    "barcode-scanner:allow-open-app-settings"
   ]
 }
