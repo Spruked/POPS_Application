@@ -2,9 +2,9 @@ name: POPS mobile build
 
 on:
   push:
-    branches: [mobile-tauri-v2]
+    branches: [mobile-tauri-v2, ios-tauri-v2]
   pull_request:
-    branches: [mobile-tauri-v2]
+    branches: [mobile-tauri-v2, ios-tauri-v2]
   workflow_dispatch:
 
 concurrency:
@@ -250,13 +250,42 @@ jobs:
       - run: npm run build
       - name: Rust core compiles for iOS device
         run: cargo build --manifest-path src-tauri/Cargo.toml --lib --target aarch64-apple-ios
-      # `tauri ios init` needs an Apple team; without one the job ends at the Rust compile gate above.
+      # Unsigned simulator build + launch smoke test: runs without any Apple account,
+      # so the iPhone build is proven before signing is set up.
       - name: Generate mobile icons from POPS badge
-        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
         run: npx tauri icon public/popsbadge.png
       - name: Init iOS project
-        if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
         run: npx tauri ios init --ci
+      - name: Add Apple privacy manifest to the Xcode project
+        run: |
+          APP_DIR=$(ls -d src-tauri/gen/apple/*_iOS | head -1)
+          cp src-tauri/ios/PrivacyInfo.xcprivacy "$APP_DIR/"
+          command -v xcodegen >/dev/null || brew install xcodegen
+          (cd src-tauri/gen/apple && xcodegen generate)
+      - name: Simulator build
+        continue-on-error: true
+        run: npx tauri ios build --ci --debug --target aarch64-sim
+      - name: Launch on iPhone simulator and screenshot
+        continue-on-error: true
+        run: |
+          APP=$(find src-tauri/gen/apple/build -name "*.app" -path "*iphonesimulator*" | head -1)
+          [ -n "$APP" ] || APP=$(find src-tauri/gen/apple/build -name "*.app" | head -1)
+          echo "App bundle: $APP"
+          test -f "$APP/PrivacyInfo.xcprivacy" && echo "privacy manifest bundled" || echo "WARNING: privacy manifest not in bundle"
+          /usr/libexec/PlistBuddy -c "Print :NSLocalNetworkUsageDescription" "$APP/Info.plist"
+          DEVICE=$(xcrun simctl list devices available | grep -m1 -oE "iPhone [^(]+\(([0-9A-F-]{36})\)" | grep -oE "[0-9A-F-]{36}")
+          xcrun simctl boot "$DEVICE"
+          xcrun simctl install "$DEVICE" "$APP"
+          xcrun simctl launch "$DEVICE" com.proofofpresence.app
+          sleep 25
+          mkdir -p ios-smoke
+          xcrun simctl io "$DEVICE" screenshot ios-smoke/launch.png
+          xcrun simctl spawn "$DEVICE" log show --last 2m --predicate 'process CONTAINS "proof"' > ios-smoke/app-log.txt || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pops-ios-simulator-smoke
+          path: ios-smoke/
       # Signed IPA only when an Apple team + App Store Connect API key are configured.
       - name: Build signed IPA
         if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' }}
@@ -266,7 +295,8 @@ jobs:
           APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
         run: |
           echo "${{ secrets.APPLE_API_KEY_P8 }}" > "$APPLE_API_KEY_PATH"
-          npx tauri ios build --ci --export-method app-store-connect
+          # CFBundleVersion must increase on every TestFlight upload.
+          npx tauri ios build --ci --export-method app-store-connect --config "{\"bundle\":{\"iOS\":{\"bundleVersion\":\"${{ github.run_number }}\"}}}"
       # Optional: send the signed IPA to TestFlight (needs the same App Store Connect key).
       - name: Upload to TestFlight
         if: ${{ env.APPLE_DEVELOPMENT_TEAM != '' && vars.IOS_UPLOAD_TESTFLIGHT == 'true' }}

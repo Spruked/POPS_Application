@@ -310,11 +310,23 @@ pub fn classify(
             format!("Chosen through the Android system picker (ACTION_GET_CONTENT, {ANDROID_CHOOSER}). Android may hand apps a copy with location metadata removed, so the device's original file can't be established."),
             true,
         ),
-        ("ios", _) => make(
-            "ios_file_chooser",
-            "unknown",
-            "iOS acquisition paths are not characterized yet; they are planned with the iOS release.".into(),
+        ("ios", "camera") => make(
+            "ios_webkit_camera",
+            "not_established",
+            "A camera capture was requested through the iOS WebKit file input. WebKit hands the app a new JPEG encoded from the camera image, not the camera's original file, and it may leave out location metadata.".into(),
             true,
+        ),
+        ("ios", "photo_library") => make(
+            "ios_webkit_photo_picker",
+            "not_established",
+            "Chosen through the iOS photo picker in WebKit. iOS hands apps a copy (often converted from HEIC to JPEG) and may remove location metadata, so the original file in the photo library can't be established.".into(),
+            true,
+        ),
+        ("ios", _) => make(
+            "ios_document_picker",
+            "not_established",
+            "Chosen through the iOS Files picker. The file is preserved exactly as received; its history before that is unknown.".into(),
+            false,
         ),
         _ => make(
             "desktop_file_selection",
@@ -522,7 +534,11 @@ mod tests {
         assert_eq!((picked.acquisition_path.as_str(), picked.original_camera_bytes.as_str(), picked.location_may_be_redacted), ("android_content_picker", "not_established", true));
         let desktop = classify("file", "windows", Some("IMG_0001.jpg"), now).unwrap();
         assert_eq!((desktop.acquisition_path.as_str(), desktop.original_camera_bytes.as_str()), ("desktop_file_selection", "not_established"));
-        assert_eq!(classify("file", "ios", None, now).unwrap().original_camera_bytes, "unknown");
+        assert_eq!(classify("file", "ios", None, now).unwrap().acquisition_path, "ios_document_picker");
+        let ios_cam = classify("camera", "ios", Some("image.jpg"), now).unwrap();
+        assert_eq!((ios_cam.acquisition_path.as_str(), ios_cam.original_camera_bytes.as_str(), ios_cam.location_may_be_redacted), ("ios_webkit_camera", "not_established", true));
+        let ios_lib = classify("photo_library", "ios", None, now).unwrap();
+        assert_eq!((ios_lib.acquisition_path.as_str(), ios_lib.location_may_be_redacted), ("ios_webkit_photo_picker", true));
         assert!(classify("screenshot", "android", None, now).is_err());
         // No path claims established camera bytes today.
         for (src, os, name) in [("camera", "android", Some("JPEG_20261021_163200_1.jpg")), ("photo_library", "android", None), ("file", "windows", None), ("camera", "ios", None)] {

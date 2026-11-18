@@ -4,9 +4,21 @@ Apple requires two things before any app can go on an iPhone:
 1. A **Mac** to build it (GitHub supplies one for free in the cloud).
 2. An **active** Apple Developer account to sign it. Wait until Apple confirms your payment.
 
+## Before your Apple account is active
+Every push to `ios-tauri-v2` already builds POPS for the iPhone **simulator** on GitHub's Mac, launches it, and saves a screenshot.
+To see it, go to Actions → the latest run → **iOS** job → Artifacts → `pops-ios-simulator-smoke` (`launch.png`).
+No Apple account is needed for this.
+
+## Work on it on your own machine
+```
+git fetch origin
+git checkout ios-tauri-v2
+```
+A Mac with Xcode can run it directly: `npm ci && npx tauri ios dev`.
+
 ## Step 1 — Put this code on GitHub
 1. Unzip `POPS_iOS_Source.zip`.
-2. Upload it to your repo `Spruked/POPS_Application` on the branch `mobile-tauri-v2`. The easiest way is GitHub Desktop: open the folder, then Commit, then Push.
+2. Upload it to your repo `Spruked/POPS_Application` on the branch `ios-tauri-v2`. The easiest way is GitHub Desktop: open the folder, then Commit, then Push.
    - The `.github/workflows/mobile-build.yml` file needs a token or login with the **workflow** permission. GitHub Desktop or the web upload handles this for you.
 
 ## Step 2 — Collect your Apple details (after your account is active)
@@ -32,7 +44,7 @@ Go to Repo → Settings → Secrets and variables → Actions → **New reposito
 Then open the **Variables** tab → New variable → `IOS_UPLOAD_TESTFLIGHT` = `true`.
 
 ## Step 4 — Build
-Go to Repo → **Actions** → "Mobile Build" → **Run workflow** → choose branch `mobile-tauri-v2`. The build takes about 20 minutes.
+Go to Repo → **Actions** → "Mobile Build" → **Run workflow** → choose branch `ios-tauri-v2`. The build takes about 20 minutes.
 
 ## Step 5 — Install on your iPhone
 1. On your iPhone, install **TestFlight** from the App Store.

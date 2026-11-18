@@ -133,7 +133,7 @@ export default function DeviceSync() {
             <button className="btn btn-primary" disabled={busy || !code.trim()} onClick={() => void join()} data-testid="sync-join-button">Pair</button>
             <button className="btn btn-ghost" disabled={busy || !peers.some((p) => p.role === 'desktop' && !p.revoked)} onClick={() => void syncNow()} data-testid="sync-now-button"><RefreshCw size={16} /> Sync now</button>
           </div>
-          <p style={{ fontSize: 13, opacity: 0.8 }}>POPS syncs automatically when you open the app and every 5 minutes while it's open. It tries your secure gateway first, then the same Wi-Fi.</p>
+          <p style={{ fontSize: 13, opacity: 0.8 }}>POPS syncs automatically when you open the app and every 5 minutes while it's open. It tries your secure gateway first, then the same Wi-Fi.{caps?.platform === 'ios' && ' On iPhone, tap Allow when iOS asks to find devices on your local network. If you tapped Don\'t Allow, turn on Settings → Apps → POPS → Local Network.'}</p>
         </div>
       ) : (
         <div className="card" style={{ marginBottom: 16 }}>

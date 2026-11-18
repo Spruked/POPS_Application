@@ -204,6 +204,7 @@ export default function Reminders() {
             <p style={{ margin: '8px 0 0' }}>
               POPS uses several independent safeguards, but no phone app can guarantee every alert is seen. Battery savers, Do Not Disturb, a phone that is switched off or notifications turned off can stop alerts.
               {caps?.platform === 'android' && ' On Android, allow "Alarms & reminders" for POPS and turn off battery optimization for it.'}
+              {caps?.platform === 'ios' && ' On iPhone, allow notifications for POPS and add POPS to the allowed apps in any Focus mode you use (Settings → Focus). iOS keeps up to 64 scheduled alerts per app, so POPS schedules the nearest ones first and tops them up each time you open it.'}
               {caps && !caps.mobile && ' On desktop, reminders alert only while POPS is open. Keep POPS on your phone for alerts away from the computer.'}
             </p>
           </div>
