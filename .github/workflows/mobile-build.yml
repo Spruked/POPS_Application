@@ -254,7 +254,11 @@ jobs:
       # so the iPhone build is proven before signing is set up.
       - name: Generate mobile icons from POPS badge
         run: npx tauri icon public/popsbadge.png
+      # Tauri needs a team id to generate the Xcode project. Simulator builds are not
+      # signed, so a placeholder is used until the real APPLE_DEVELOPMENT_TEAM secret exists.
       - name: Init iOS project
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM || '0000000000' }}
         run: npx tauri ios init --ci
       - name: Add Apple privacy manifest to the Xcode project
         run: |
@@ -264,6 +268,8 @@ jobs:
           (cd src-tauri/gen/apple && xcodegen generate)
       - name: Simulator build
         continue-on-error: true
+        env:
+          APPLE_DEVELOPMENT_TEAM: ${{ secrets.APPLE_DEVELOPMENT_TEAM || '0000000000' }}
         run: npx tauri ios build --ci --debug --target aarch64-sim
       - name: Launch on iPhone simulator and screenshot
         continue-on-error: true
