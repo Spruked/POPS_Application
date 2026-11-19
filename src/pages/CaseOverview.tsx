@@ -4,7 +4,7 @@ import Modal from '../components/Modal';
 import { useCase } from '../hooks/useCase';
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate } from '../utils/helpers';
-import { CourtCountdown, QuickIncidentLog } from '../components/CaseQuickTools';
+import { CourtCountdown, QuickIncidentLog, SyncStatusBadge } from '../components/CaseQuickTools';
 import type { CaseAlert, CaseLifecycleStage, CaseMatter, CaseMatterType, CaseOverviewData } from '../types';
 
 const CASE_TYPES: Array<[CaseMatterType, string]> = [
@@ -56,6 +56,7 @@ export default function CaseOverview() {
       <div style={{ display: 'flex', gap: 8 }}><button className="btn btn-ghost" type="button" onClick={() => setAlert(newAlert())}><ShieldAlert size={16} /> Add Alert</button><button className="btn btn-primary" type="button" onClick={() => setMatter(newMatter())}><Plus size={16} /> Add Related Case</button></div>
     </div>
 
+    <SyncStatusBadge />
     <CourtCountdown />
     <QuickIncidentLog />
 

@@ -49,8 +49,13 @@ function App() {
 
   useEffect(() => {
     const openDiagnostics = () => setPage("diagnostics");
+    const openSync = () => setPage("settingsDeviceSync");
     window.addEventListener("pops:open-diagnostics", openDiagnostics);
-    return () => window.removeEventListener("pops:open-diagnostics", openDiagnostics);
+    window.addEventListener("pops:open-device-sync", openSync);
+    return () => {
+      window.removeEventListener("pops:open-diagnostics", openDiagnostics);
+      window.removeEventListener("pops:open-device-sync", openSync);
+    };
   }, []);
 
   (window as any).__showToast = show;

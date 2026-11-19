@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { sealCameraPhoto } from '../utils/evidenceCapture';
 import { invoke } from '@tauri-apps/api/core';
-import { CalendarClock, Camera, FileDown, Image as ImageIcon, X, Zap, UserX } from 'lucide-react';
+import { CalendarClock, Camera, FileDown, Image as ImageIcon, RefreshCw, X, Zap, UserX } from 'lucide-react';
 import { useToast } from '../hooks/useToast';
 import { generateId, formatDate } from '../utils/helpers';
 import type { Evidence, Incident, OperationalRecord } from '../types';
@@ -260,6 +260,71 @@ table{width:100%;border-collapse:collapse;font-size:11px}th,td{border:1px solid 
   return (
     <button data-testid="case-pdf-export" className="btn btn-primary" style={{ width: '100%', minHeight: 44, marginBottom: 20 }} disabled={busy} onClick={exportPdf}>
       <FileDown size={16} /> {busy ? 'Preparing…' : 'Export Court PDF (Evidence, Incidents, Reminders)'}
+    </button>
+  );
+}
+
+interface SyncPeerLite { id: string; role: string; name: string; lastSyncAt?: string | null; revoked: boolean }
+
+function timeAgo(iso: string): string {
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+export function SyncStatusBadge() {
+  const [state, setState] = useState<{ peer: SyncPeerLite | null; conflicts: number } | null>(null);
+
+  useEffect(() => {
+    const load = () =>
+      Promise.all([
+        invoke<SyncPeerLite[]>('sync_list_peers'),
+        invoke<unknown[]>('sync_get_conflicts'),
+      ])
+        .then(([peers, conflicts]) => {
+          const active = peers.filter(p => !p.revoked);
+          const latest = [...active].sort((a, b) => (b.lastSyncAt || '').localeCompare(a.lastSyncAt || ''))[0] ?? null;
+          setState({ peer: latest, conflicts: conflicts.length });
+        })
+        .catch(() => setState(null));
+    load();
+    window.addEventListener('pops:reminders-changed', load);
+    window.addEventListener('focus', load);
+    return () => {
+      window.removeEventListener('pops:reminders-changed', load);
+      window.removeEventListener('focus', load);
+    };
+  }, []);
+
+  if (!state || !state.peer) return null;
+  const { peer, conflicts } = state;
+  const stale = !peer.lastSyncAt || Date.now() - new Date(peer.lastSyncAt).getTime() > 24 * 3600 * 1000;
+  const tone = conflicts ? 'var(--spinoza-crimson, #ef4444)' : stale ? 'var(--hume-amber, #f59e0b)' : 'var(--success, #22c55e)';
+
+  return (
+    <button
+      type="button"
+      data-testid="sync-status-badge"
+      className="card"
+      onClick={() => window.dispatchEvent(new CustomEvent('pops:open-device-sync'))}
+      style={{ display: 'flex', alignItems: 'center', gap: 12, width: '100%', textAlign: 'left', marginBottom: 20, minHeight: 56, cursor: 'pointer', borderLeft: `3px solid ${tone}` }}
+    >
+      <RefreshCw size={20} color={tone} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>
+          {peer.lastSyncAt ? `Synced with ${peer.name} ${timeAgo(peer.lastSyncAt)}` : `Paired with ${peer.name} – not synced yet`}
+        </div>
+        <div data-testid="sync-status-detail" style={{ fontSize: 12, color: conflicts ? tone : 'var(--text-muted)' }}>
+          {conflicts
+            ? `${conflicts} change${conflicts === 1 ? '' : 's'} need${conflicts === 1 ? 's' : ''} your decision – tap to review`
+            : stale ? 'Open Device Sync to sync now' : 'Everything is up to date'}
+        </div>
+      </div>
+      {conflicts > 0 && <span className="badge badge-red" style={{ fontSize: 13 }}>{conflicts}</span>}
     </button>
   );
 }
